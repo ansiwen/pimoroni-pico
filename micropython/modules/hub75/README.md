@@ -119,7 +119,7 @@ matrix.update(graphics)
 
 The width must be a multiple of 16. `color_order` works as for `Hub75`, and `buffer` can be a `bytearray` of `width * height * 4` bytes, the same as `Hub75`. Only one `Hub75SPWM` can run at a time. It uses 5 PIO state machines in two PIOs, and one DMA channel.
 
-`start()` refreshes the panel at a steady 60Hz in the background, and `update(graphics)` converts the image, which takes ~2ms for 128x64. If a frame is being sent, `update()` first waits for the part it converts to be sent, ~2.6ms at most, so a frame never shows half of an update. `update()` can be called from a thread on the other core, so drawing doesn't hold up the rest of your program.
+`start()` refreshes the panel at a steady 60Hz in the background, and `update(graphics)` converts the image, which takes ~2ms for 128x64. If a frame is being sent, `update()` first waits for the part it converts to be sent, ~5ms at most, so a frame never shows half of an update. `update()` can be called from a thread on the other core, so drawing doesn't hold up the rest of your program.
 
 ### Timing your frames
 
@@ -139,7 +139,7 @@ while True:
 * `set_config_registers(red, green, blue)` or `set_config_registers(regs)`: your own register values, as lists, eg. from [DMD_STM32's register_test/profiles](https://github.com/board707/DMD_STM32/tree/dev-V2/register_test/profiles). Each value has the register number in the high byte and its value in the low byte. Most profiles have different values for the chips driving the red, green and blue LEDs; `regs` sends the same values to all of them.
 * `set_brightness(0-255)` and `set_colour_depth(1-10)`: take effect with the next `update()`.
 * `set_avoid_tearing(False)`: never wait for the frame being sent, like `Hub75`. The frame being sent can then show the old image above a line and the new one below it.
-* `set_upload_clock_div(div)`: slow down the frame upload if the image is noisy, 1 (25MHz) by default.
+* `set_clock_div(div)`: the speed of the CLK line, used for the frame upload and as the chips' PWM clock: system clock / (6 * div). The default is 2, 12.5MHz at 150MHz, ~5ms per 128x64 frame. 1 gives 25MHz and ~2.6ms per frame, but can cause noise with bright images on some panels.
 * `set_refresh_rate(hz)`: 60Hz by default.
 
 #### Register profiles
@@ -168,7 +168,7 @@ The chips after the pitch are the panel's row drivers. On a P2.5 128x64 panel wi
 
 ### Statistics
 
-`stats()` returns a dictionary with the timings of the last frame and `update()` in microseconds, and `torn_frames`: the number of frames where an upload overtook `update()`, which should stay at 0. If it doesn't, use `sync` or a higher `set_upload_clock_div()`.
+`stats()` returns a dictionary with the timings of the last frame and `update()` in microseconds, and `torn_frames`: the number of frames where an upload overtook `update()`, which should stay at 0. If it doesn't, use `sync` or a higher `set_clock_div()`.
 
 ```python
 >>> matrix.stats()

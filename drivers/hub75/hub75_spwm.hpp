@@ -104,7 +104,7 @@ class Hub75SPWM {
 
     // Convert a PicoGraphics frame buffer into the frame buffer, in sync with the
     // background refresh so a frame never shows half of an update (for PEN_RGB888).
-    // Takes ~2ms for 128x64 on an RP2350, up to the rest of a running upload (~2.6ms).
+    // Takes ~2ms for 128x64 on an RP2350, up to the rest of a running upload (~5ms).
     // It is shown with the frame after the following one (~17-33ms).
     // Can be called from either core.
     // With `sync` > 0, first wait until `sync` frames have been sent since the
@@ -115,25 +115,21 @@ class Hub75SPWM {
     void update(PicoGraphics *graphics, uint sync = 0);
 
     // If update() is called while a frame is being sent, wait for the parts of
-    // the frame it converts to be sent first, so the frame isn't torn (up to ~2.6ms).
+    // the frame it converts to be sent first, so the frame isn't torn (up to ~5ms).
     // Without this, that frame can show the old image above a line and the new
     // one below it, like Hub75.
     bool avoid_tearing = true;
 
-    // For testing: set the PIO clock divider of the frame upload, applied from the
-    // next frame. One data clock takes 6 PIO cycles, the default is the smallest
-    // integer divider that keeps it at or below 25MHz (1 at 150MHz, ~2.6ms for
-    // 128x64). Raise it if the image is noisy, or if torn_frames goes up: an
-    // upload must be slower than update() converts (~1.9ms for 128x64).
-    void set_upload_clock_div(float div) { upload_clock_div = div; }
-    float get_upload_clock_div() const { return upload_clock_div; }
-
-    // For testing: set the PIO clock divider of the free-running DCLK between
-    // uploads, applied from the end of the next upload. One clock takes 2 PIO
-    // cycles, the default is 6 at 150MHz (12.5MHz), 3 gives 25MHz. Commands
-    // (VSYNC, latches, registers) keep the default speed.
-    void set_dclk_clock_div(float div);
-    float get_dclk_clock_div() const { return dclk_clock_div; }
+    // Set the speed of the CLK line: the frame upload and the free-running DCLK
+    // (the chips' PWM clock) always run at the same speed, so dark colours don't
+    // flicker. The clock is the system clock / (6 * div). The default is the
+    // smallest integer divider that keeps it at or below 12.5MHz: 2 at 150MHz,
+    // ~5ms per 128x64 frame. 1 gives 25MHz (~2.6ms per frame), which can cause
+    // noise on some panels; an upload must also stay slower than update()
+    // converts (~1.9ms for 128x64), see torn_frames. Applied from the next frame.
+    // Commands (VSYNC, latches, registers) always keep their own speed.
+    void set_clock_div(float div);
+    float get_clock_div() const { return clock_div; }
 
     // For testing: CPU time of the last background frame start, duration of the
     // last frame upload, and how long the last update() spent waiting for the
@@ -197,9 +193,8 @@ class Hub75SPWM {
     volatile uint32_t frame_number = 0;
     volatile uint32_t frame_us = 1000000 / 60;
     uint32_t sync_frame = 0;   // frame_number of the last update() with sync
-    volatile float upload_clock_div = 0;    // 0 until start()
-    volatile float dclk_clock_div = 0;      // 0 until start()
-    volatile uint32_t dclk_clkdiv_reg = 0;  // dclk_clock_div as written to the SM's CLKDIV register
+    volatile float clock_div = 0;           // 0 until start()
+    volatile uint32_t dclk_clkdiv_reg = 0;  // 3 * clock_div as written to the DCLK SM's CLKDIV register
     uint32_t upload_start_us = 0;
     alarm_id_t frame_alarm = 0;
 

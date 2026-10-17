@@ -20,9 +20,10 @@ namespace pimoroni {
 // Maximum CLK frequency in MHz (most HUB75 panels handle about 20-25MHz)
 static const uint MAX_CLK_MHZ = 15;
 
-// Maximum CLK frequency of the frame upload in kHz. A 128x64 frame takes ~2.6ms
-// at 25MHz, still slower than update() converts it on an RP2350 (~1.9ms).
-static const uint MAX_UPLOAD_CLK_KHZ = 25000;
+// Default maximum CLK frequency of the frame upload and the free-running DCLK in
+// kHz, as in DMD_STM32. A P2.5 SM16380SH panel showed noise at 25MHz with a
+// bright profile, and dark pixels flickered if the two clocks differed.
+static const uint MAX_CLOCK_KHZ = 12500;
 
 
 // The driver that the DMA IRQ handler belongs to (only one instance is supported)
@@ -224,17 +225,16 @@ void Hub75SPWM::start() {
 
     // Integer dividers keep the CLK below MAX_CLK_MHZ (frame/regs SMs: 6 cycles per clock, clk_lat: 2)
     uint data_clkdiv = 1 + cycles_per_us / (MAX_CLK_MHZ * 5);
-    if(upload_clock_div == 0) {
-        // Smallest integer divider, 6 cycles per clock: 1 (25MHz) at 150MHz
-        uint upload_clk_khz = clock_get_hz(clk_sys) / 6000;
-        upload_clock_div = (upload_clk_khz + MAX_UPLOAD_CLK_KHZ - 1) / MAX_UPLOAD_CLK_KHZ;
+    if(clock_div == 0) {
+        // Smallest integer divider, 6 cycles per upload clock: 2 (12.5MHz) at 150MHz
+        uint clock_khz = clock_get_hz(clk_sys) / 6000;
+        set_clock_div((clock_khz + MAX_CLOCK_KHZ - 1) / MAX_CLOCK_KHZ);
     }
     frame_config = hub75_spwm_frame_program_init(pio, sm_frame, frame_prog_offs, data_clkdiv, pin_r0, pin_clk);
     regs_config = hub75_spwm_regs_program_init(pio, sm_regs, regs_prog_offs, data_clkdiv, pin_r0, pin_lat, pin_clk);
     uint clk_lat_clkdiv = 1 + cycles_per_us / (MAX_CLK_MHZ * 2);
     clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs,
         clk_lat_clkdiv, pin_lat, pin_clk);
-    if(dclk_clock_div == 0) set_dclk_clock_div(clk_lat_clkdiv);
     clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio_gclk, sm_clk_cnt, clk_cnt_prog_offs,
         1, pin_clk, pin_oe);
     rows_config = hub75_spwm_rows_program_init(pio_gclk, sm_rows, rows_prog_offs, pin_row_a);
@@ -475,7 +475,7 @@ int64_t Hub75SPWM::start_frame() {
 
     // Upload the frame buffer, the DMA IRQ handler finishes the frame
     pio_sm_set_enabled(pio, sm_frame, false);
-    sm_config_set_clkdiv(&frame_config, upload_clock_div);
+    sm_config_set_clkdiv(&frame_config, clock_div);
     pio_sm_init(pio, sm_frame, frame_prog_offs, &frame_config);
     pio_sm_put(pio, sm_frame, width / CHANNELS_PER_CHIP - 1);
     pio_sm_exec(pio, sm_frame, pio_encode_pull(false, true));
@@ -518,13 +518,14 @@ void __not_in_flash_func(Hub75SPWM::finish_frame)() {
     state = State::IDLE;
 }
 
-void Hub75SPWM::set_dclk_clock_div(float div) {
+void Hub75SPWM::set_clock_div(float div) {
+    // The free-running DCLK takes 2 PIO cycles per clock, the upload 6
     uint32_t div_int;
     uint8_t div_frac8;
-    pio_calculate_clkdiv8_from_float(div, &div_int, &div_frac8);
+    pio_calculate_clkdiv8_from_float(div * 3, &div_int, &div_frac8);
     // One register value, so the DMA IRQ never sees half of a change
     dclk_clkdiv_reg = (div_int << PIO_SM0_CLKDIV_INT_LSB) | ((uint32_t)div_frac8 << PIO_SM0_CLKDIV_FRAC_LSB);
-    dclk_clock_div = div;
+    clock_div = div;
 }
 
 // Free-running CLK is the reference clock (DCLK) for the chips' PWM
