@@ -55,8 +55,7 @@ class Hub75SPWM {
     uint8_t brightness = 255;
 
     // Number of significant bits (1 - 10) of the gamma corrected colour
-    // sent to the panel. DMD_STM32 only sends 4 bits, reduce this if you
-    // see flicker or noise in dark colours.
+    // sent to the panel. DMD_STM32 only sends 4 bits.
     uint colour_depth = 10;
 
     // Interstate 75 (W) pinout
