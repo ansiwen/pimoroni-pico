@@ -11,7 +11,7 @@
 Test pattern and tuning tool for HUB75 panels with S-PWM driver chips.
 
 Button A short press: next pattern
-Button A long press:  toggle colour depth (10 / 4 bits)
+Button A long press:  toggle VSYNC after / before the frame data (V1 / V0)
 Button B short press: next register profile (SM16380SH 1/32 scan)
 Button B long press:  next brightness
 
@@ -73,7 +73,15 @@ PressDetector button_a(Interstate75::A);
 PressDetector button_b(Interstate75::B);
 
 const uint8_t BRIGHTNESS_LEVELS[] = {255, 128, 64, 16};
-const uint PROFILE_COUNT = count_of(SM16380SH_PROFILES) + 1; // + the driver's default
+
+// The driver's first SM16380SH default, from DMD_STM32's DMD_SPWM_Driver_RP.h
+const uint16_t RP2040_DEFAULT[] = {
+  0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x0750, 0x0800, 0x0900, 0x0a02, 0x0b0c,
+  0x0c08, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100, 0x1200, 0x1300, 0x1414, 0x1500,
+  0x1630, 0x1700, 0x1801, 0x1904, 0x1a03, 0x1b14, 0x1c12, 0x1d00, 0x1e00, 0x1f0c
+};
+
+const uint PROFILE_COUNT = count_of(SM16380SH_PROFILES) + 1;
 
 void draw_orientation() {
   int w = graphics.bounds.w;
@@ -124,10 +132,11 @@ void draw_scroller(int offset) {
   graphics.text(message, Point(x, graphics.bounds.h / 2 - 8), -1, 2);
 }
 
-// Profile 0 is the driver's built-in default, 1.. are SM16380SH_PROFILES
+// Profile 0 is the DMD_STM32 RP2040 default, 1.. are SM16380SH_PROFILES.
+// Profile 1 is the same as the driver's built-in default.
 void apply_profile(uint profile) {
   if(profile == 0) {
-    hub75.load_chip_defaults();
+    hub75.set_config_registers(RP2040_DEFAULT, count_of(RP2040_DEFAULT));
   } else {
     const SPWMProfile &p = SM16380SH_PROFILES[profile - 1];
     hub75.set_config_registers(p.regs[0], p.regs[1], p.regs[2], count_of(p.regs[0]));
@@ -135,7 +144,7 @@ void apply_profile(uint profile) {
 }
 
 const char *profile_name(uint profile) {
-  return profile == 0 ? "REG 0: driver default" : SM16380SH_PROFILES[profile - 1].name;
+  return profile == 0 ? "DMD_STM32 RP2040 default" : SM16380SH_PROFILES[profile - 1].name;
 }
 
 int main() {
@@ -146,10 +155,10 @@ int main() {
   hub75.start(pio_irq);
 
   uint pattern = 0;
-  uint profile = 0;
+  uint profile = 1;
   uint brightness = 0;
   int offset = 0;
-  uint32_t overlay_until = 0;
+  uint32_t overlay_until = to_ms_since_boot(get_absolute_time()) + 2000;
 
   while(true) {
     uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -161,7 +170,7 @@ int main() {
         changed = true;
         break;
       case PressDetector::LONG:
-        hub75.colour_depth = hub75.colour_depth == 10 ? 4 : 10;
+        hub75.vsync_after_data = !hub75.vsync_after_data;
         changed = true;
         break;
       default:
@@ -185,8 +194,8 @@ int main() {
 
     if(changed) {
       overlay_until = now + 2000;
-      printf("pattern %u, %s, colour depth %u, brightness %u\n",
-        pattern, profile_name(profile), hub75.colour_depth, hub75.brightness);
+      printf("pattern %u, R%u (%s), vsync %s data, brightness %u\n",
+        pattern, profile, profile_name(profile), hub75.vsync_after_data ? "after" : "before", hub75.brightness);
     }
 
     graphics.set_pen(0, 0, 0);
@@ -206,7 +215,7 @@ int main() {
 
     if(now < overlay_until) {
       char label[32];
-      snprintf(label, sizeof(label), "R%u D%u B%u", profile, hub75.colour_depth, hub75.brightness);
+      snprintf(label, sizeof(label), "R%u V%u B%u", profile, hub75.vsync_after_data ? 1 : 0, hub75.brightness);
       graphics.set_pen(0, 0, 0);
       graphics.rectangle(Rect(0, 0, graphics.measure_text(label, 1) + 2, 9));
       graphics.set_pen(255, 255, 255);

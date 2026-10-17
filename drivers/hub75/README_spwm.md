@@ -16,7 +16,7 @@ You can identify the chips from the markings on the larger ICs on the back of th
 
 | Chip      | `Hub75SPWM::Chip` | Status                                      |
 |-----------|-------------------|---------------------------------------------|
-| SM16380SH | `SM16380SH`       | Ported from DMD_STM32, not yet hardware-tested here |
+| SM16380SH | `SM16380SH`       | Tested on a P2.5 128x64 1/32 scan panel (C7262FJ row driver) |
 | ICND2055  | `ICND2055`        | Ported from DMD_STM32, untested             |
 | FM6373    | `FM6373`          | Ported from DMD_STM32, untested             |
 
@@ -46,7 +46,7 @@ int main() {
 }
 ```
 
-The driver uses 3 state machines and 28 instructions of `pio0`, and one DMA channel. The default pins match Interstate 75 and Interstate 75 W:
+The driver uses 3 state machines and 23 instructions of `pio0`, and one DMA channel. It needs `width * height * 12` bytes of RAM, 96KB for a 128x64 panel, plus the PicoGraphics frame buffer. The default pins match Interstate 75 and Interstate 75 W:
 - R0-B1: GPIO 0-5
 - A-E: GPIO 6-10
 - CLK: GPIO 11
@@ -71,4 +71,4 @@ See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern.
 3. If dark colours flicker or show noise, try a lower `hub75.colour_depth`. The default is 10 bits; DMD_STM32 uses 4.
 4. `hub75.brightness` (0-255) scales the greyscale values sent to the panel. It takes effect on the next `update()`.
 
-Each upload briefly disturbs the panel's PWM, so `update()` skips the upload when the image, `brightness` and `colour_depth` are unchanged. `refresh()` always uploads.
+`update()` skips the upload when the image, `brightness` and `colour_depth` are unchanged. `refresh()` always uploads. A frame is first converted into a 64KB stream and then sent with a single DMA transfer, at the same clock rate as the free-running DCLK. This keeps the panel's rows running evenly during the upload. After the data, the driver sends VSYNC, which makes the panel show the new frame. DMD_STM32 sends VSYNC before the data, so each frame only appears with the next upload. To get that behaviour, set `hub75.vsync_after_data = false`.

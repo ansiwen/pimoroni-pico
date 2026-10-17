@@ -15,17 +15,30 @@ SPDX-License-Identifier: GPL-3.0-or-later
 namespace pimoroni {
 
 // Maximum CLK frequency in MHz (most HUB75 panels handle about 20-25MHz)
-static const uint MAX_CLK_MHZ = 15;
+static const uint MAX_CLK_MHZ = 12;
+
+// PIO cycles per CLK pulse, for both the data and the free running DCLK programs
+static const uint CYCLES_PER_CLK = 8;
 
 // Clocks per scan line: OE (GCLK) off, OE on, OE off
 static const uint GCLK_D1 = 28;
 static const uint GCLK_D2 = 4;
 static const uint GCLK_D3 = 96;
 
-static const uint16_t SM16380SH_CONFIG[] = {
-    0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x0750, 0x0800, 0x0900, 0x0a02, 0x0b0c,
-    0x0c08, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100, 0x1200, 0x1300, 0x1414, 0x1500,
-    0x1630, 0x1700, 0x1801, 0x1904, 0x1a03, 0x1b14, 0x1c12, 0x1d00, 0x1e00, 0x1f0c
+// LAT bit in the data stream
+static const uint8_t LAT = 0b1000000;
+
+// Register write commands per frame: 0x00AA 0x01AA <register> 0x0055 0x0155
+static const uint REGISTER_COMMANDS = 5;
+
+// DMD_STM32 register_test profile "regtype1: built-in main SM16380SH register config"
+static const uint16_t SM16380SH_CONFIG[3][32] = {
+    {0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x078c, 0x0800, 0x0900, 0x0a02, 0x0b0c, 0x0c08, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100,
+     0x1200, 0x1308, 0x1414, 0x1500, 0x1630, 0x1700, 0x1801, 0x1904, 0x1a03, 0x1b14, 0x1c12, 0x1d00, 0x1e00, 0x1f0c, 0x2000, 0x2200},
+    {0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x078c, 0x0800, 0x0900, 0x0a02, 0x0b0c, 0x0c18, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100,
+     0x1200, 0x1308, 0x1422, 0x1500, 0x1630, 0x1700, 0x1801, 0x1903, 0x1a01, 0x1b14, 0x1c8f, 0x1d00, 0x1e00, 0x1f0c, 0x2000, 0x2200},
+    {0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x078c, 0x0800, 0x0900, 0x0a02, 0x0b0c, 0x0c30, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100,
+     0x1200, 0x1308, 0x1432, 0x1500, 0x1630, 0x1700, 0x1801, 0x1903, 0x1a01, 0x1b14, 0x1c8f, 0x1d00, 0x1e00, 0x1f0c, 0x2000, 0x2200}
 };
 
 static const uint16_t ICND2055_CONFIG[] = {
@@ -52,24 +65,27 @@ Hub75SPWM::Hub75SPWM(uint width, uint height, Chip chip)
     back_buffer = new Pixel[width * height];
     clear();
 
-    // Each transfer shifts one 16-bit word into every chip in the chain
-    line_buffer[0] = new uint8_t[width];
-    line_buffer[1] = new uint8_t[width];
+    // One 16-bit word per chip, for each of the 16 channels of each scan line.
+    // Allocated as words since the streams are sent with 32-bit DMA transfers.
+    frame_stream_len = scan_rows * CHANNELS_PER_CHIP * width;
+    frame_stream = (uint8_t *)new uint32_t[frame_stream_len / 4];
+    register_stream_len = REGISTER_COMMANDS * width;
+    register_stream = (uint8_t *)new uint32_t[register_stream_len / 4];
 
     load_chip_defaults();
 }
 
 Hub75SPWM::~Hub75SPWM() {
     delete[] back_buffer;
-    delete[] line_buffer[0];
-    delete[] line_buffer[1];
+    delete[] (uint32_t *)frame_stream;
+    delete[] (uint32_t *)register_stream;
 }
 
 void Hub75SPWM::load_chip_defaults() {
     switch(chip) {
         case Chip::SM16380SH:
             gclk_bits = 14;
-            set_config_registers(SM16380SH_CONFIG, count_of(SM16380SH_CONFIG));
+            set_config_registers(SM16380SH_CONFIG[0], SM16380SH_CONFIG[1], SM16380SH_CONFIG[2], count_of(SM16380SH_CONFIG[0]));
             break;
         case Chip::ICND2055:
             gclk_bits = 13;
@@ -143,8 +159,6 @@ void Hub75SPWM::set_row(uint r) {
 void Hub75SPWM::start(irq_handler_t handler) {
     if(running || !handler) return;
 
-    uint cycles_per_us = clock_get_hz(clk_sys) / 1000000;
-
     sm_data = pio_claim_unused_sm(pio, true);
     sm_clk_lat = pio_claim_unused_sm(pio, true);
     sm_clk_cnt = pio_claim_unused_sm(pio, true);
@@ -153,22 +167,24 @@ void Hub75SPWM::start(irq_handler_t handler) {
     clk_lat_prog_offs = pio_add_program(pio, &hub75_spwm_clk_lat_program);
     clk_cnt_prog_offs = pio_add_program(pio, &hub75_spwm_clk_cnt_program);
 
-    // Integer dividers keep the CLK below MAX_CLK_MHZ (data SM: 6 cycles per clock, clk_lat: 2)
-    data_config = hub75_spwm_data_program_init(pio, sm_data, data_prog_offs,
-        1 + cycles_per_us / (MAX_CLK_MHZ * 5), pin_r0, pin_lat, pin_clk);
-    clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs,
-        1 + cycles_per_us / (MAX_CLK_MHZ * 2), pin_lat, pin_clk);
-    clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio, sm_clk_cnt, clk_cnt_prog_offs,
-        1, pin_clk, pin_oe);
+    // The data and DCLK programs share a divider so the CLK rate is identical,
+    // the clk_cnt SM runs at full speed so it doesn't miss any edges.
+    uint cycles_per_us = clock_get_hz(clk_sys) / 1000000;
+    uint clkdiv = (cycles_per_us + CYCLES_PER_CLK * MAX_CLK_MHZ - 1) / (CYCLES_PER_CLK * MAX_CLK_MHZ);
+
+    data_config = hub75_spwm_data_program_init(pio, sm_data, data_prog_offs, clkdiv, pin_r0, pin_lat, pin_clk);
+    clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs, clkdiv, pin_lat, pin_clk);
+    clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio, sm_clk_cnt, clk_cnt_prog_offs, 1, pin_clk, pin_oe);
+    pio_sm_set_enabled(pio, sm_data, true);
     pio_sm_set_enabled(pio, sm_clk_lat, true);
 
     dma_channel = dma_claim_unused_channel(true);
-    dma_config = dma_channel_get_default_config(dma_channel);
-    channel_config_set_transfer_data_size(&dma_config, DMA_SIZE_8);
-    channel_config_set_read_increment(&dma_config, true);
-    channel_config_set_write_increment(&dma_config, false);
-    channel_config_set_dreq(&dma_config, pio_get_dreq(pio, sm_data, true));
-    dma_channel_configure(dma_channel, &dma_config, &pio->txf[sm_data], nullptr, width, false);
+    dma_channel_config config = dma_channel_get_default_config(dma_channel);
+    channel_config_set_transfer_data_size(&config, DMA_SIZE_32);
+    channel_config_set_read_increment(&config, true);
+    channel_config_set_write_increment(&config, false);
+    channel_config_set_dreq(&config, pio_get_dreq(pio, sm_data, true));
+    dma_channel_configure(dma_channel, &config, &pio->txf[sm_data], nullptr, 0, false);
 
     // PIO IRQ 0 (raised by the clk_cnt SM) switches rows
     uint irq_num = pio_get_irq_num(pio, 0);
@@ -259,48 +275,30 @@ void Hub75SPWM::send_vsync() {
     send_latches(3);
 }
 
-// Restart the data SM for a transfer of `width` clocks with LAT high for the last `latches`
-void Hub75SPWM::restart_data_sm(uint latches) {
-    pio_sm_set_enabled(pio, sm_data, false);
-    pio_sm_init(pio, sm_data, data_prog_offs, &data_config);
-    pio_sm_set_enabled(pio, sm_data, true);
-    pio_sm_put_blocking(pio, sm_data, ((width - latches - 1) << 16) | (width - 1));
-}
-
-// Wait for the DMA and the data SM to finish a transfer
-void Hub75SPWM::wait_data_sm() {
+// Clock out a stream of bytes through the data SM (see hub75_spwm.pio),
+// `len` must be a multiple of 4
+void Hub75SPWM::send_stream(const uint8_t *buf, uint len) {
+    dma_channel_set_trans_count(dma_channel, len / 4, false);
+    dma_channel_set_read_addr(dma_channel, buf, true);
     dma_channel_wait_for_finish_blocking(dma_channel);
-    while(!pio_interrupt_get(pio, 7)) {
-        tight_loop_contents();
-    }
-    pio_interrupt_clear(pio, 7);
+
+    // Wait for the last bytes to leave the FIFO, then return LAT low
+    hub75_spwm_wait_tx_stall(pio, sm_data);
+    pio_sm_exec(pio, sm_data, pio_encode_set(pio_pins, 0));
 }
 
-// Send a 16-bit register value to every chip, with separate values for the
-// red, green and blue drivers of both halves
-void Hub75SPWM::send_register(uint16_t red, uint16_t green, uint16_t blue, uint latches) {
-    // DMA ring mode requires the buffer to be aligned to its size
-    static uint8_t reg[16] __attribute__((aligned(16)));
-
-    for(auto bit = 0u; bit < 16; bit++) {
-        uint16_t mask = 0x8000 >> bit;
-        reg[bit] = ((red & mask) ? 0b001001 : 0)
-                 | ((green & mask) ? 0b010010 : 0)
-                 | ((blue & mask) ? 0b100100 : 0);
+// Write a register command to `buf`: the same 16-bit value for every chip,
+// with separate values for the red, green and blue drivers of both halves,
+// and LAT high for the last `latches` clocks. Returns the end of the command.
+uint8_t *Hub75SPWM::build_register(uint8_t *buf, uint16_t red, uint16_t green, uint16_t blue, uint latches) {
+    for(auto i = 0u; i < width; i++) {
+        uint16_t mask = 0x8000 >> (i % 16);
+        buf[i] = ((red & mask) ? 0b001001 : 0)
+               | ((green & mask) ? 0b010010 : 0)
+               | ((blue & mask) ? 0b100100 : 0);
+        if(i >= width - latches) buf[i] |= LAT;
     }
-
-    restart_data_sm(latches);
-
-    // Wrap the read address every 16 bytes to repeat the value for each chip
-    channel_config_set_ring(&dma_config, false, 4);
-    dma_channel_set_config(dma_channel, &dma_config, false);
-    dma_channel_set_trans_count(dma_channel, width, false);
-    dma_channel_set_read_addr(dma_channel, reg, true);
-
-    wait_data_sm();
-
-    channel_config_set_ring(&dma_config, false, 0);
-    dma_channel_set_config(dma_channel, &dma_config, false);
+    return buf + width;
 }
 
 void Hub75SPWM::init_mux() {
@@ -346,8 +344,25 @@ void Hub75SPWM::stop_gclk() {
     sleep_us(10);
 }
 
-// Send VSYNC and the next config register (one per frame, round-robin)
-void Hub75SPWM::load_config_register() {
+// Stop the free running DCLK with CLK low, so the data SM can drive CLK.
+// GCLK keeps running, counting the data clocks instead.
+void Hub75SPWM::pause_dclk() {
+    pio_sm_set_enabled(pio, sm_clk_lat, false);
+    pio_sm_exec(pio, sm_clk_lat, pio_encode_nop()); // side 0: CLK low
+}
+
+// Free-running CLK is the reference clock (DCLK) for the chips' PWM
+void Hub75SPWM::resume_dclk() {
+    pio_sm_set_enabled(pio, sm_clk_lat, false);
+    pio_sm_init(pio, sm_clk_lat, clk_lat_prog_offs + hub75_spwm_clk_lat_offset_free_run, &clk_lat_config);
+    pio_sm_set_enabled(pio, sm_clk_lat, true);
+}
+
+// At the start of the frame: VSYNC, then the next config register (one per frame,
+// round-robin), then restart GCLK. Leaves DCLK stopped.
+void Hub75SPWM::frame_sync() {
+    stop_gclk();
+
     uint i = next_config_register;
     next_config_register++;
     if(next_config_register >= config_register_count) next_config_register = 0;
@@ -364,11 +379,13 @@ void Hub75SPWM::load_config_register() {
     start_gclk();
 
     // Register writes are framed by 0x00AA 0x01AA before and 0x0055 0x0155 after
-    send_register(0x00aa, 5);
-    send_register(0x01aa, 5);
-    send_register(config_registers[0][i], config_registers[1][i], config_registers[2][i], 5);
-    send_register(0x0055, 5);
-    send_register(0x0155, 5);
+    uint8_t *p = register_stream;
+    p = build_register(p, 0x00aa, 0x00aa, 0x00aa, 5);
+    p = build_register(p, 0x01aa, 0x01aa, 0x01aa, 5);
+    p = build_register(p, config_registers[0][i], config_registers[1][i], config_registers[2][i], 5);
+    p = build_register(p, 0x0055, 0x0055, 0x0055, 5);
+    p = build_register(p, 0x0155, 0x0155, 0x0155, 5);
+    send_stream(register_stream, register_stream_len);
 }
 
 // Fill `buf` with the bits for `channel` of scan line `y` for every chip in the chain.
@@ -403,49 +420,44 @@ void Hub75SPWM::fill_line(uint8_t *buf, uint y, uint channel) {
     }
 }
 
-// Upload the greyscale data: for every scan line, 16 transfers (one per channel)
-// each followed by a single clock data latch.
-void Hub75SPWM::data_transfer() {
-    uint current = 0;
-    bool first = true;
+bool Hub75SPWM::needs_build() {
+    return dirty || brightness != built_brightness || colour_depth != built_colour_depth;
+}
 
-    dma_channel_set_trans_count(dma_channel, width, false);
-
+// Convert the back buffer to the stream of greyscale data: for every scan line,
+// one transfer per channel, each followed by a single clock data latch.
+void Hub75SPWM::build_frame() {
+    uint8_t *p = frame_stream;
     for(auto y = 0u; y < scan_rows; y++) {
         for(auto channel = 0u; channel < CHANNELS_PER_CHIP; channel++) {
-            // Fill one buffer while the other is being sent
-            fill_line(line_buffer[current], y, channel);
-
-            if(first) {
-                first = false;
-            } else {
-                wait_data_sm();
-            }
-
-            restart_data_sm(1);
-            dma_channel_set_read_addr(dma_channel, line_buffer[current], true);
-
-            current ^= 1;
+            fill_line(p, y, channel);
+            p[width - 1] |= LAT;
+            p += width;
         }
     }
+
+    dirty = false;
+    built_brightness = brightness;
+    built_colour_depth = colour_depth;
 }
 
 void Hub75SPWM::refresh() {
     if(!running) return;
 
-    dirty = false;
-    uploaded_brightness = brightness;
-    uploaded_colour_depth = colour_depth;
+    if(needs_build()) build_frame();
 
-    stop_gclk();
-    load_config_register();
-    data_transfer();
-    wait_data_sm();
-    pio_sm_set_enabled(pio, sm_data, false);
-
-    // Free-running CLK is the reference clock (DCLK) for the chips' PWM
-    pio_sm_init(pio, sm_clk_lat, clk_lat_prog_offs + hub75_spwm_clk_lat_offset_free_run, &clk_lat_config);
-    pio_sm_set_enabled(pio, sm_clk_lat, true);
+    if(vsync_after_data) {
+        // Upload while the panel keeps displaying the previous frame
+        pause_dclk();
+        send_stream(frame_stream, frame_stream_len);
+        resume_dclk();
+        frame_sync();
+    } else {
+        // DMD_STM32 order, each frame is displayed from the next frame_sync
+        frame_sync();
+        send_stream(frame_stream, frame_stream_len);
+    }
+    resume_dclk();
 }
 
 void Hub75SPWM::update(PicoGraphics *graphics) {
@@ -469,7 +481,7 @@ void Hub75SPWM::update(PicoGraphics *graphics) {
         });
     }
 
-    if(dirty || brightness != uploaded_brightness || colour_depth != uploaded_colour_depth) {
+    if(needs_build()) {
         refresh();
     }
 }
