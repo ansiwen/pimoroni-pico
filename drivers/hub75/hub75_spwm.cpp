@@ -95,7 +95,9 @@ Hub75SPWM::~Hub75SPWM() {
 void Hub75SPWM::load_chip_defaults() {
     switch(chip) {
         case Chip::SM16380SH:
-            gclk_bits = 14;
+            // As in DMD_STM32's STM32 driver (its RP2040 driver keeps the default
+            // of 14). With 14, greyscale values from 512 up all looked the same.
+            gclk_bits = 13;
             set_config_registers(SM16380SH_CONFIG[0], SM16380SH_CONFIG[1], SM16380SH_CONFIG[2], count_of(SM16380SH_CONFIG[0]));
             break;
         case Chip::ICND2055:
