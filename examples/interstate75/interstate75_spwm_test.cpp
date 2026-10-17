@@ -88,7 +88,7 @@ const uint16_t RP2040_DEFAULT[] = {
 const uint PROFILE_COUNT = count_of(SM16380SH_PROFILES) + 1;
 
 // Frame upload clock dividers to try. A data clock takes 6 PIO cycles, so at
-// 150MHz: 3 = 8.3MHz (default), 2.5 = 10MHz, 2 = 12.5MHz, 1.5 = 16.7MHz,
+// 150MHz: 3 = 8.3MHz, 2.5 = 10MHz, 2 = 12.5MHz (default), 1.5 = 16.7MHz,
 // 1.25 = 20MHz, 1 = 25MHz. Fractional dividers jitter by one system clock.
 const float UPLOAD_CLOCK_DIVS[] = {3.0f, 2.5f, 2.0f, 1.5f, 1.25f, 1.0f};
 
@@ -163,9 +163,14 @@ int main() {
 
   hub75.start();
 
+  // Start stepping the upload clock from the driver's default
+  uint clock_step = 0;
+  for(auto i = 0u; i < count_of(UPLOAD_CLOCK_DIVS); i++) {
+    if(UPLOAD_CLOCK_DIVS[i] == hub75.get_upload_clock_div()) clock_step = i;
+  }
+
   uint pattern = 0;
   uint profile = 2;
-  uint clock_step = 0;
   uint frame = 0;
   absolute_time_t next_frame = get_absolute_time();
   repeating_timer_t stress_timer;

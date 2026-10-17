@@ -97,20 +97,22 @@ class Hub75SPWM {
 
     // Convert a PicoGraphics frame buffer into the frame buffer, in sync with the
     // background refresh so a frame never shows half of an update (for PEN_RGB888).
-    // Takes ~3.5ms for 128x64, up to the rest of a running upload (~8ms).
+    // Takes ~2ms for 128x64 on an RP2350, up to the rest of a running upload (~5ms).
     // It is shown with the frame after the following one (~17-33ms).
     // Can be called from either core.
     void update(PicoGraphics *graphics);
 
     // If update() is called while a frame is being sent, wait for the parts of
-    // the frame it converts to be sent first, so the frame isn't torn (up to ~8ms).
+    // the frame it converts to be sent first, so the frame isn't torn (up to ~5ms).
     // Without this, that frame can show the old image above a line and the new
     // one below it, like Hub75.
     bool avoid_tearing = true;
 
     // For testing: set the PIO clock divider of the frame upload, applied from the
     // next frame. One data clock takes 6 PIO cycles, the default is the smallest
-    // integer divider that keeps it at or below 15MHz (3 at 150MHz, 8.3MHz).
+    // integer divider that keeps it at or below 12.5MHz (2 at 150MHz, ~5ms for
+    // 128x64). Raise it if the image is noisy. If an upload is faster than
+    // update() converts (~2ms for 128x64), frames can tear.
     void set_upload_clock_div(float div) { upload_clock_div = div; }
     float get_upload_clock_div() const { return upload_clock_div; }
 

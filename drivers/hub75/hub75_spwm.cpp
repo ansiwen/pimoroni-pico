@@ -19,6 +19,11 @@ namespace pimoroni {
 // Maximum CLK frequency in MHz (most HUB75 panels handle about 20-25MHz)
 static const uint MAX_CLK_MHZ = 15;
 
+// Maximum CLK frequency of the frame upload in kHz. This is the frequency of the
+// free-running DCLK at 150MHz, so the chips' PWM clock doesn't change during the
+// upload. A P2.5 SM16380SH panel worked at 25MHz.
+static const uint MAX_UPLOAD_CLK_KHZ = 12500;
+
 // Frame rate of the background refresh
 static const int64_t FRAME_US = 1000000 / 60;
 
@@ -205,7 +210,11 @@ void Hub75SPWM::start() {
 
     // Integer dividers keep the CLK below MAX_CLK_MHZ (frame/regs SMs: 6 cycles per clock, clk_lat: 2)
     uint data_clkdiv = 1 + cycles_per_us / (MAX_CLK_MHZ * 5);
-    if(upload_clock_div == 0) upload_clock_div = data_clkdiv;
+    if(upload_clock_div == 0) {
+        // Smallest integer divider, 6 cycles per clock: 2 (12.5MHz) at 150MHz, 2 (10.4MHz) at 125MHz
+        uint upload_clk_khz = clock_get_hz(clk_sys) / 6000;
+        upload_clock_div = (upload_clk_khz + MAX_UPLOAD_CLK_KHZ - 1) / MAX_UPLOAD_CLK_KHZ;
+    }
     frame_config = hub75_spwm_frame_program_init(pio, sm_frame, frame_prog_offs, data_clkdiv, pin_r0, pin_clk);
     regs_config = hub75_spwm_regs_program_init(pio, sm_regs, regs_prog_offs, data_clkdiv, pin_r0, pin_lat, pin_clk);
     clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs,
