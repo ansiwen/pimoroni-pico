@@ -222,11 +222,27 @@ static size_t get_registers(mp_obj_t seq_in, uint16_t *regs, size_t max) {
     return len;
 }
 
-// set_config_registers(regs) or set_config_registers(red, green, blue)
+// set_config_registers(regs), set_config_registers(red, green, blue) or
+// set_config_registers(profile), a profile like hub75.SM16380SH_REG2 being (red, green, blue)
 mp_obj_t Hub75SPWM_set_config_registers(size_t n_args, const mp_obj_t *args) {
     _Hub75SPWM_obj_t *self = MP_OBJ_TO_PTR2(args[0], _Hub75SPWM_obj_t);
     const size_t max = 40;
     uint16_t regs[3][max];
+    mp_obj_t profile_args[4];
+    if(n_args == 2) {
+        size_t len;
+        mp_obj_t *items;
+        mp_obj_get_array(args[1], &len, &items);
+        if(len == 3 && !mp_obj_is_int(items[0])) {
+            // A profile: (red, green, blue)
+            profile_args[0] = args[0];
+            profile_args[1] = items[0];
+            profile_args[2] = items[1];
+            profile_args[3] = items[2];
+            args = profile_args;
+            n_args = 4;
+        }
+    }
     if(n_args == 2) {
         size_t count = get_registers(args[1], regs[0], max);
         self->hub75->set_config_registers(regs[0], count);

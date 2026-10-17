@@ -65,7 +65,7 @@ See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern. For M
     hub75.set_config_registers(regs, count_of(regs));
     ```
 
-    Most profiles have different values for the red, green and blue drivers. To use all three, call `set_config_registers(red, green, blue, count)`. `examples/interstate75/sm16380sh_profiles.hpp` contains every SM16380SH 1/32 scan profile. The test example can switch between them with button B.
+    Most profiles have different values for the red, green and blue drivers. To use all three, call `set_config_registers(red, green, blue, count)`. `hub75_spwm_profiles.h` contains every SM16380SH 1/32 scan profile from DMD_STM32, named after DMD_STM32's numbers, eg. `HUB75_SPWM_SM16380SH_REG8_RED`. The test example can switch between them with button B.
 
     You can call this before or after `start()`. If the clocks are running, all registers are sent immediately, which takes about half a second. Register `0x02` (scan lines) is always overwritten to match the panel height.
 3. If dark colours flicker or show noise, try a lower `hub75.colour_depth`. The default is 10 bits; DMD_STM32 uses 4.

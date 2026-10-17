@@ -96,6 +96,25 @@ const mp_obj_type_t Hub75SPWM_type = {
 };
 #endif
 
+/***** S-PWM register profiles *****/
+// Each profile is a tuple of the red, green and blue register values, in flash
+#include "drivers/hub75/hub75_spwm_profiles.h"
+
+#define HUB75_ROM_INT32(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26, a27, a28, a29, a30, a31) \
+    MP_ROM_INT(a0), MP_ROM_INT(a1), MP_ROM_INT(a2), MP_ROM_INT(a3), MP_ROM_INT(a4), MP_ROM_INT(a5), MP_ROM_INT(a6), MP_ROM_INT(a7), MP_ROM_INT(a8), MP_ROM_INT(a9), MP_ROM_INT(a10), MP_ROM_INT(a11), MP_ROM_INT(a12), MP_ROM_INT(a13), MP_ROM_INT(a14), MP_ROM_INT(a15), MP_ROM_INT(a16), MP_ROM_INT(a17), MP_ROM_INT(a18), MP_ROM_INT(a19), MP_ROM_INT(a20), MP_ROM_INT(a21), MP_ROM_INT(a22), MP_ROM_INT(a23), MP_ROM_INT(a24), MP_ROM_INT(a25), MP_ROM_INT(a26), MP_ROM_INT(a27), MP_ROM_INT(a28), MP_ROM_INT(a29), MP_ROM_INT(a30), MP_ROM_INT(a31)
+#define HUB75_ROM_INTS(...) HUB75_ROM_INT32(__VA_ARGS__)
+
+#define HUB75_PROFILE_TUPLES(n, name) \
+    static const mp_rom_obj_tuple_t sm16380sh_reg##n##_red = {{&mp_type_tuple}, 32, {HUB75_ROM_INTS(HUB75_SPWM_SM16380SH_REG##n##_RED)}}; \
+    static const mp_rom_obj_tuple_t sm16380sh_reg##n##_green = {{&mp_type_tuple}, 32, {HUB75_ROM_INTS(HUB75_SPWM_SM16380SH_REG##n##_GREEN)}}; \
+    static const mp_rom_obj_tuple_t sm16380sh_reg##n##_blue = {{&mp_type_tuple}, 32, {HUB75_ROM_INTS(HUB75_SPWM_SM16380SH_REG##n##_BLUE)}}; \
+    static const mp_rom_obj_tuple_t sm16380sh_reg##n = {{&mp_type_tuple}, 3, { \
+        MP_ROM_PTR(&sm16380sh_reg##n##_red), MP_ROM_PTR(&sm16380sh_reg##n##_green), MP_ROM_PTR(&sm16380sh_reg##n##_blue)}};
+
+HUB75_SPWM_SM16380SH_PROFILES(HUB75_PROFILE_TUPLES)
+
+#define HUB75_PROFILE_GLOBAL(n, name) { MP_ROM_QSTR(MP_QSTR_SM16380SH_REG##n), MP_ROM_PTR(&sm16380sh_reg##n) },
+
 /***** Globals Table *****/
 
 static const mp_map_elem_t hub75_globals_table[] = {
@@ -107,6 +126,7 @@ static const mp_map_elem_t hub75_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_PANEL_SM16380SH), MP_ROM_INT(PANEL_SM16380SH) },
     { MP_ROM_QSTR(MP_QSTR_PANEL_ICND2055), MP_ROM_INT(PANEL_ICND2055) },
     { MP_ROM_QSTR(MP_QSTR_PANEL_FM6373), MP_ROM_INT(PANEL_FM6373) },
+    HUB75_SPWM_SM16380SH_PROFILES(HUB75_PROFILE_GLOBAL)
     { MP_ROM_QSTR(MP_QSTR_BUTTON_A), MP_ROM_INT(14) },
     { MP_ROM_QSTR(MP_QSTR_BUTTON_USER), MP_ROM_INT(23) },
     { MP_ROM_QSTR(MP_QSTR_LED_R), MP_ROM_INT(16) },

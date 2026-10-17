@@ -14,7 +14,8 @@ Test pattern and tuning tool for HUB75 panels with S-PWM driver chips.
 Button A short press: next pattern
 Button A long press:  next timing mode (M), see TIMING_MODES: the panel refresh
                       rate, and how the frames are timed
-Button B short press: next register profile (SM16380SH 1/32 scan)
+Button B short press: next register profile (SM16380SH 1/32 scan), shown with
+                      DMD_STM32's number, eg. REG2
 Button B long press:  toggle interrupt stress test (S1): a timer interrupt
                       blocks the CPU for 50us every 5ms
 
@@ -78,14 +79,7 @@ bool stress_callback(repeating_timer_t *) {
   return true;
 }
 
-// The driver's first SM16380SH default, from DMD_STM32's DMD_SPWM_Driver_RP.h
-const uint16_t RP2040_DEFAULT[] = {
-  0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x0750, 0x0800, 0x0900, 0x0a02, 0x0b0c,
-  0x0c08, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100, 0x1200, 0x1300, 0x1414, 0x1500,
-  0x1630, 0x1700, 0x1801, 0x1904, 0x1a03, 0x1b14, 0x1c12, 0x1d00, 0x1e00, 0x1f0c
-};
-
-const uint PROFILE_COUNT = count_of(SM16380SH_PROFILES) + 1;
+const uint PROFILE_COUNT = count_of(SM16380SH_PROFILES);
 
 // Timing modes to compare. The scroller moves one pixel per drawn frame, so
 // uneven frame times show as judder.
@@ -154,19 +148,9 @@ void draw_scroller(int offset) {
   graphics.text(message, Point(x, graphics.bounds.h / 2 - 8), -1, 2);
 }
 
-// Profile 0 is the DMD_STM32 RP2040 default, 1.. are SM16380SH_PROFILES.
-// Profile 2 is the same as the driver's built-in default.
 void apply_profile(uint profile) {
-  if(profile == 0) {
-    hub75.set_config_registers(RP2040_DEFAULT, count_of(RP2040_DEFAULT));
-  } else {
-    const SPWMProfile &p = SM16380SH_PROFILES[profile - 1];
-    hub75.set_config_registers(p.regs[0], p.regs[1], p.regs[2], count_of(p.regs[0]));
-  }
-}
-
-const char *profile_name(uint profile) {
-  return profile == 0 ? "DMD_STM32 RP2040 default" : SM16380SH_PROFILES[profile - 1].name;
+  const SPWMProfile &p = SM16380SH_PROFILES[profile];
+  hub75.set_config_registers(p.regs[0], p.regs[1], p.regs[2], count_of(p.regs[0]));
 }
 
 int main() {
@@ -177,7 +161,7 @@ int main() {
   hub75.start();
 
   uint pattern = 0;
-  uint profile = 2;
+  uint profile = 1; // REG 2, the same as the driver's default
   uint mode = 0;
   absolute_time_t next_frame = get_absolute_time();
   absolute_time_t next_print = get_absolute_time();
@@ -227,8 +211,8 @@ int main() {
     if(changed) {
       const TimingMode &c = TIMING_MODES[mode];
       overlay_until = now + 2000;
-      printf("pattern %u, R%u (%s), M%u: %uHz refresh, %ufps %s, stress %s\n",
-        pattern, profile, profile_name(profile), mode, c.refresh_hz, c.fps, c.sync ? "synced" : "free",
+      printf("pattern %u, %s, M%u: %uHz refresh, %ufps %s, stress %s\n",
+        pattern, SM16380SH_PROFILES[profile].name, mode, c.refresh_hz, c.fps, c.sync ? "synced" : "free",
         stress ? "on" : "off");
     }
 
@@ -249,7 +233,7 @@ int main() {
 
     if(now < overlay_until) {
       char label[32];
-      snprintf(label, sizeof(label), "R%u M%u S%u", profile, mode, stress ? 1 : 0);
+      snprintf(label, sizeof(label), "REG%u M%u S%u", SM16380SH_PROFILES[profile].number, mode, stress ? 1 : 0);
       graphics.set_pen(0, 0, 0);
       graphics.rectangle(Rect(0, 0, graphics.measure_text(label, 1) + 2, 9));
       graphics.set_pen(255, 255, 255);

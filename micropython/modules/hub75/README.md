@@ -135,11 +135,36 @@ while True:
 
 ### Tuning
 
-* `set_config_registers(regs)` or `set_config_registers(red, green, blue)`: replace the chip's configuration registers with a profile that suits your panel, eg. from [DMD_STM32's register_test/profiles](https://github.com/board707/DMD_STM32/tree/dev-V2/register_test/profiles). They are sent one per refresh, so all of them are sent within a second. `load_chip_defaults()` restores the built-in ones.
+* `set_config_registers(profile)`: replace the chip's configuration registers with a profile that suits your panel. If you see ghost pixels or wrong brightness, try the profiles below. They are sent one per refresh, so all of them are sent within a second. `load_chip_defaults()` restores the built-in ones (`SM16380SH_REG2`).
+* `set_config_registers(red, green, blue)` or `set_config_registers(regs)`: your own register values, as lists, eg. from [DMD_STM32's register_test/profiles](https://github.com/board707/DMD_STM32/tree/dev-V2/register_test/profiles). Each value has the register number in the high byte and its value in the low byte. Most profiles have different values for the chips driving the red, green and blue LEDs; `regs` sends the same values to all of them.
 * `set_brightness(0-255)` and `set_colour_depth(1-10)`: take effect with the next `update()`.
 * `set_avoid_tearing(False)`: never wait for the frame being sent, like `Hub75`. The frame being sent can then show the old image above a line and the new one below it.
 * `set_upload_clock_div(div)`: slow down the frame upload if the image is noisy, 1 (25MHz) by default.
 * `set_refresh_rate(hz)`: 60Hz by default.
+
+#### Register profiles
+
+The SM16380SH 1/32 scan profiles from [DMD_STM32](https://github.com/board707/DMD_STM32) are built in, named after DMD_STM32's profile numbers. Each is a tuple `(red, green, blue)` of register values:
+
+```python
+matrix.set_config_registers(hub75.SM16380SH_REG8)
+```
+
+| Profile | DMD_STM32 description |
+|---|---|
+| `SM16380SH_REG1` | built-in main SM16380SH register config (DMD_STM32's default) |
+| `SM16380SH_REG2` | preserved former built-in SM16380SH CONFIG1 (this driver's default) |
+| `SM16380SH_REG7` | P2.5 - SM16380SH - SM5166PS - 1/32 |
+| `SM16380SH_REG8` | P2.5 - SM16380SH - RUC7258D - 1/32 |
+| `SM16380SH_REG10` | P1.953 - SM16380SH - 5368 - 1/32 |
+| `SM16380SH_REG18` | P2.5 - SM16380SH - SM5166PF - 1/32 |
+| `SM16380SH_REG27` | P3 - SM16380SH - 1/32 |
+| `SM16380SH_REG32` | P4 - SM16380SH - 1/32 |
+| `SM16380SH_REG34` | P2.5 - SM16380SH - RUC7258D - 1/32 |
+| `SM16380SH_REG43` | P2.5 - SM16380SH - 6158 - 1/32 |
+| `SM16380SH_REG65` | P2.5 - SM16380SH - SM5166PS - 1/32 |
+
+The chips after the pitch are the panel's row drivers. On a P2.5 128x64 panel with C7262FJ row drivers, `SM16380SH_REG7`, `SM16380SH_REG32` and `SM16380SH_REG34` show ghost pixels, the others don't. `SM16380SH_REG1` is the darkest.
 
 ### Statistics
 
