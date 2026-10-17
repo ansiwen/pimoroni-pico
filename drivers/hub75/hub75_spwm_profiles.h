@@ -13,6 +13,12 @@ all use them.
 SPDX-License-Identifier: GPL-3.0-or-later
 */
 
+// On a P2.5 128x64 panel with C7262FJ row drivers, REG7, REG32 and REG34 show
+// ghost pixels and REG1 is the darkest. REG8 is the brightest, but can show
+// noise in large bright areas, most with a 25MHz CLK. Register 0x07 sets the
+// brightness per colour: 0x078c instead of REG2's 0x072c for red made only red
+// darker. Changing 0x0c had no visible effect.
+
 // X(number, description) for every profile
 #define HUB75_SPWM_SM16380SH_PROFILES(X) \
     X(1, "REG 1: built-in main SM16380SH register config") \

@@ -121,6 +121,8 @@ The width must be a multiple of 16. `color_order` works as for `Hub75`, and `buf
 
 `start()` refreshes the panel at a steady 60Hz in the background, and `update(graphics)` converts the image, which takes ~2ms for 128x64. If a frame is being sent, `update()` first waits for the part it converts to be sent, ~5ms at most, so a frame never shows half of an update. `update()` can be called from a thread on the other core, so drawing doesn't hold up the rest of your program.
 
+On the RP2350 and RP2040, MicroPython has no GIL: don't create new global variables while the other core's thread runs, eg. with `global` in a function. Adding one to the module's dictionary while the other core looks up a global can make that lookup fail with a `NameError`. Define all globals before you start the thread.
+
 ### Timing your frames
 
 The panel shows each image for a whole number of refreshes. If you draw at 25fps while the panel refreshes at 60Hz, images are shown for 2 or 3 refreshes, and scrolling judders. Instead, set a refresh rate that is a multiple of your frame rate, and let `update()` time your frames with `sync`: it waits until `sync` refreshes have been shown since the last `update()` with `sync`, then converts the image between two refreshes:
@@ -164,7 +166,7 @@ matrix.set_config_registers(hub75.SM16380SH_REG8)
 | `SM16380SH_REG43` | P2.5 - SM16380SH - 6158 - 1/32 |
 | `SM16380SH_REG65` | P2.5 - SM16380SH - SM5166PS - 1/32 |
 
-The chips after the pitch are the panel's row drivers. On a P2.5 128x64 panel with C7262FJ row drivers, `SM16380SH_REG7`, `SM16380SH_REG32` and `SM16380SH_REG34` show ghost pixels, the others don't. `SM16380SH_REG1` is the darkest.
+The chips after the pitch are the panel's row drivers. On a P2.5 128x64 panel with C7262FJ row drivers, `SM16380SH_REG7`, `SM16380SH_REG32` and `SM16380SH_REG34` show ghost pixels, the others don't. `SM16380SH_REG1` is the darkest. `SM16380SH_REG8` is the brightest, but can show noise in large bright areas, most with `set_clock_div(1)`.
 
 ### Statistics
 

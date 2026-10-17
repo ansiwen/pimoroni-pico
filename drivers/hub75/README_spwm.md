@@ -71,6 +71,16 @@ See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern. For M
 3. If dark colours flicker or show noise, try a lower `hub75.colour_depth`. The default is 10 bits; DMD_STM32 uses 4.
 4. `hub75.brightness` (0-255) scales the greyscale values sent to the panel. Like `colour_depth`, it is applied when pixels are set, so it takes effect on the next `update()`.
 
+What caused the problems seen on the SM16380SH test panel:
+
+| What you see | Cause |
+|---|---|
+| Bright colours all look the same, yellow looks green | The greyscale MSB is in the wrong bit of the chip's 16-bit word, so bright values clip. The SM16380SH needs 13 bits (`gclk_bits`), not the 14 of DMD_STM32's RP2040 driver. |
+| The darkest values flicker | The upload clock and the free-running DCLK differ. `set_clock_div()` sets both. |
+| Changing noise in large bright areas | CLK too fast for the profile: REG8 at 25MHz. Use the default 12.5MHz, or a dimmer profile. |
+| Ghost pixels | The profile doesn't suit the panel, eg. REG7, REG32 and REG34 on the test panel. |
+| Each image is shown for 2 or 3 refreshes, scrolling judders | The frame rate doesn't divide the refresh rate. Use `update(&graphics, sync)`, see below. |
+
 ## How it works
 
 `start()` begins refreshing the panel at a steady 60Hz in the background (see `set_refresh_rate()`). A timer interrupt starts each frame: it waits for the start of the scan (row 0), sends VSYNC, the pre-active commands and one configuration register, then starts the DMA transfer of the frame buffer. A DMA interrupt restarts DCLK when the transfer is done. This takes about 0.5ms of CPU per frame, about 3%.
