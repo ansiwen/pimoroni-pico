@@ -11,6 +11,8 @@
 Test pattern and tuning tool for HUB75 panels with S-PWM driver chips.
 
 Button A short press: next pattern
+Button A long press:  toggle avoid_tearing (T1: update() waits for the frame
+                      being sent, T0: converts immediately like Hub75)
 Button B short press: next register profile (SM16380SH 1/32 scan)
 Button B long press:  toggle interrupt stress test (S1): a timer interrupt
                       blocks the CPU for 50us every 5ms
@@ -173,6 +175,10 @@ int main() {
         pattern = (pattern + 1) % 3;
         changed = true;
         break;
+      case PressDetector::LONG:
+        hub75.avoid_tearing = !hub75.avoid_tearing;
+        changed = true;
+        break;
       default:
         break;
     }
@@ -198,8 +204,8 @@ int main() {
 
     if(changed) {
       overlay_until = now + 2000;
-      printf("pattern %u, R%u (%s), stress %s\n",
-        pattern, profile, profile_name(profile), stress ? "on" : "off");
+      printf("pattern %u, R%u (%s), avoid tearing %s, stress %s\n",
+        pattern, profile, profile_name(profile), hub75.avoid_tearing ? "on" : "off", stress ? "on" : "off");
     }
 
     graphics.set_pen(0, 0, 0);
@@ -219,7 +225,7 @@ int main() {
 
     if(now < overlay_until) {
       char label[32];
-      snprintf(label, sizeof(label), "R%u S%u", profile, stress ? 1 : 0);
+      snprintf(label, sizeof(label), "R%u T%u S%u", profile, hub75.avoid_tearing ? 1 : 0, stress ? 1 : 0);
       graphics.set_pen(0, 0, 0);
       graphics.rectangle(Rect(0, 0, graphics.measure_text(label, 1) + 2, 9));
       graphics.set_pen(255, 255, 255);
@@ -231,7 +237,8 @@ int main() {
     hub75.update(&graphics);
     int64_t update_us = absolute_time_diff_us(start, get_absolute_time());
     if(++frame % 60 == 0) {
-      printf("update %lldus, frame start %luus\n", update_us, hub75.frame_start_us); // once per second
+      printf("update %lldus (waiting %luus, converting %luus), frame start %luus\n", // once per second
+        update_us, hub75.update_wait_us, hub75.update_convert_us, hub75.frame_start_us);
     }
 
     // Draw at 60Hz, the same rate as the refresh

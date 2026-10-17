@@ -102,8 +102,17 @@ class Hub75SPWM {
     // Can be called from either core.
     void update(PicoGraphics *graphics);
 
-    // CPU time of the last background frame start in microseconds (for testing)
+    // If update() is called while a frame is being sent, wait for the parts of
+    // the frame it converts to be sent first, so the frame isn't torn (up to ~8ms).
+    // Without this, that frame can show the old image above a line and the new
+    // one below it, like Hub75.
+    bool avoid_tearing = true;
+
+    // For testing: CPU time of the last background frame start, and how long the
+    // last update() spent waiting for the upload and converting, in microseconds
     volatile uint32_t frame_start_us = 0;
+    uint32_t update_wait_us = 0;
+    uint32_t update_convert_us = 0;
 
     private:
     static const uint MAX_CONFIG_REGISTERS = 40;

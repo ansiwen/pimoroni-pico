@@ -501,6 +501,9 @@ uint Hub75SPWM::upload_line() {
 }
 
 void Hub75SPWM::update(PicoGraphics *graphics) {
+    absolute_time_t update_start = get_absolute_time();
+    int64_t wait = 0;
+
     // Gamma, colour depth and brightness for every 8-bit value
     uint16_t lut[256];
     for(auto i = 0u; i < 256; i++) lut[i] = greyscale(i);
@@ -535,12 +538,14 @@ void Hub75SPWM::update(PicoGraphics *graphics) {
     // The interrupts can run on the other core, only state, frame_number and
     // the DMA position are shared.
     const uint32_t *src = (const uint32_t *)graphics->frame_buffer;
-    bool behind = state == State::UPLOADING;
+    bool behind = avoid_tearing && state == State::UPLOADING;
     uint32_t frame = frame_number;
 
     for(auto line = 0u; line < scan_rows; line++) {
-        if(behind) {
+        if(behind && frame_number == frame && upload_line() <= line) {
+            absolute_time_t wait_start = get_absolute_time();
             while(frame_number == frame && upload_line() <= line) tight_loop_contents();
+            wait += absolute_time_diff_us(wait_start, get_absolute_time());
         }
         const uint32_t *top = &src[line * width];
         const uint32_t *bottom = &src[(line + scan_rows) * width];
@@ -551,6 +556,8 @@ void Hub75SPWM::update(PicoGraphics *graphics) {
                 lut[(c1 >> 16) & 0xff], lut[(c1 >> 8) & 0xff], lut[c1 & 0xff]);
         }
     }
+    update_wait_us = wait;
+    update_convert_us = absolute_time_diff_us(update_start, get_absolute_time()) - wait;
 }
 
 }
