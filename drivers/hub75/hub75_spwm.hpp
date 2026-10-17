@@ -69,7 +69,9 @@ class Hub75SPWM {
 
     // width is the total length of the chain and must be a multiple of 16.
     // `buffer` must hold buffer_size() words, or nullptr to allocate it.
-    Hub75SPWM(uint width, uint height, Chip chip = Chip::SM16380SH, uint32_t *buffer = nullptr);
+    // `color_order` works as in Hub75.
+    Hub75SPWM(uint width, uint height, Chip chip = Chip::SM16380SH, uint32_t *buffer = nullptr,
+              Hub75::COLOR_ORDER color_order = Hub75::COLOR_ORDER::RGB);
     ~Hub75SPWM();
 
     // Replace the chip configuration registers, eg. with a profile from
@@ -142,6 +144,9 @@ class Hub75SPWM {
     private:
     static const uint MAX_CONFIG_REGISTERS = 40;
     static const uint CHANNELS_PER_CHIP = 16;
+
+    // Position of the colour for the R, G and B pins in an RGB888 colour
+    uint pin_shift[3] = {16, 8, 0};
 
     // Greyscale data as it is clocked out, see hub75_spwm_pack.hpp
     uint32_t *frame_buffer = nullptr;

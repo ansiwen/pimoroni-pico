@@ -55,8 +55,23 @@ static const uint16_t FM6373_CONFIG[] = {
     0x1a1f, 0x1b10, 0x1cc1, 0x1d0a, 0x1e42, 0x1f04, 0x2008, 0x2101, 0x221c
 };
 
-Hub75SPWM::Hub75SPWM(uint width, uint height, Chip chip, uint32_t *buffer)
+Hub75SPWM::Hub75SPWM(uint width, uint height, Chip chip, uint32_t *buffer, Hub75::COLOR_ORDER color_order)
  : width(width), height(height), scan_rows(height / 2), chip(chip) {
+    // Which colour goes to the R, G and B pins, as in Hub75: the position of
+    // red, green and blue in the RGB888 colour (16, 8, 0) for each pin
+    uint r_pin = 0, g_pin = 1, b_pin = 2;
+    switch(color_order) {
+        case Hub75::COLOR_ORDER::RGB: r_pin = 0; g_pin = 1; b_pin = 2; break;
+        case Hub75::COLOR_ORDER::RBG: r_pin = 0; g_pin = 2; b_pin = 1; break;
+        case Hub75::COLOR_ORDER::GRB: r_pin = 2; g_pin = 0; b_pin = 1; break;
+        case Hub75::COLOR_ORDER::GBR: r_pin = 1; g_pin = 2; b_pin = 0; break;
+        case Hub75::COLOR_ORDER::BRG: r_pin = 1; g_pin = 0; b_pin = 2; break;
+        case Hub75::COLOR_ORDER::BGR: r_pin = 2; g_pin = 1; b_pin = 0; break;
+    }
+    pin_shift[r_pin] = 16;
+    pin_shift[g_pin] = 8;
+    pin_shift[b_pin] = 0;
+
     // Row address lines are driven by the rows SM once started, hold row 0 until then
     for(auto i = 0u; i < 5; i++) {
         gpio_init(pin_row_a + i);
@@ -131,7 +146,9 @@ uint32_t Hub75SPWM::greyscale(uint8_t v) {
 
 void Hub75SPWM::set_pixel(uint x, uint y, uint8_t r, uint8_t g, uint8_t b) {
     if(x >= width || y >= height) return;
-    hub75_spwm_pack::set(frame_buffer, x, y, width, scan_rows, greyscale(r), greyscale(g), greyscale(b));
+    uint32_t c = r << 16 | g << 8 | b;
+    hub75_spwm_pack::set(frame_buffer, x, y, width, scan_rows,
+        greyscale(c >> pin_shift[0]), greyscale(c >> pin_shift[1]), greyscale(c >> pin_shift[2]));
 }
 
 void Hub75SPWM::clear() {
@@ -536,20 +553,21 @@ void Hub75SPWM::update(PicoGraphics *graphics, uint sync) {
     // Gamma, colour depth and brightness for every 8-bit value
     uint16_t lut[256];
     for(auto i = 0u; i < 256; i++) lut[i] = greyscale(i);
+    const uint s0 = pin_shift[0], s1 = pin_shift[1], s2 = pin_shift[2]; // Colour order
 
     if(graphics->pen_type != PicoGraphics::PEN_RGB888) {
         // Converted row by row, wait for the current upload to finish first.
         // A frame that starts while converting can show part of the update.
         while(state != State::IDLE) tight_loop_contents();
         uint offset = 0;
-        graphics->frame_convert(PicoGraphics::PEN_RGB888, [this, &offset, &lut](void *data, size_t length) {
+        graphics->frame_convert(PicoGraphics::PEN_RGB888, [this, &offset, &lut, s0, s1, s2](void *data, size_t length) {
             uint32_t *p = (uint32_t *)data;
             for(auto i = 0u; i < length / sizeof(RGB888); i++) {
                 uint32_t c = *p++;
                 uint x = offset % width, y = offset / width;
                 if(y < height) {
                     hub75_spwm_pack::set(frame_buffer, x, y, width, scan_rows,
-                        lut[(c >> 16) & 0xff], lut[(c >> 8) & 0xff], lut[c & 0xff]);
+                        lut[(c >> s0) & 0xff], lut[(c >> s1) & 0xff], lut[(c >> s2) & 0xff]);
                 }
                 offset++;
             }
@@ -583,8 +601,8 @@ void Hub75SPWM::update(PicoGraphics *graphics, uint sync) {
         for(auto x = 0u; x < width; x++) {
             uint32_t c0 = top[x], c1 = bottom[x];
             hub75_spwm_pack::set_pair(frame_buffer, x, line, width, scan_rows,
-                lut[(c0 >> 16) & 0xff], lut[(c0 >> 8) & 0xff], lut[c0 & 0xff],
-                lut[(c1 >> 16) & 0xff], lut[(c1 >> 8) & 0xff], lut[c1 & 0xff]);
+                lut[(c0 >> s0) & 0xff], lut[(c0 >> s1) & 0xff], lut[(c0 >> s2) & 0xff],
+                lut[(c1 >> s0) & 0xff], lut[(c1 >> s1) & 0xff], lut[(c1 >> s2) & 0xff]);
         }
         // An upload that started meanwhile has read (part of) this line before
         // it was written. Conservative: it may have read the line just after.

@@ -6,6 +6,8 @@ target_sources(usermod_${MOD_NAME} INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/${MOD_NAME}.c
     ${CMAKE_CURRENT_LIST_DIR}/${MOD_NAME}.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../../../drivers/hub75/hub75.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/hub75_spwm.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../../../drivers/hub75/hub75_spwm.cpp
 )
 
 target_include_directories(usermod_${MOD_NAME} INTERFACE
@@ -26,3 +28,4 @@ set_source_files_properties(
 )
 
 pico_generate_pio_header(usermod_${MOD_NAME} ${CMAKE_CURRENT_LIST_DIR}/../../../drivers/hub75/hub75.pio)
+pico_generate_pio_header(usermod_${MOD_NAME} ${CMAKE_CURRENT_LIST_DIR}/../../../drivers/hub75/hub75_spwm.pio)

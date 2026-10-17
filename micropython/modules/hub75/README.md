@@ -15,6 +15,10 @@ It can, in theory, be used with your own custom wiring, though custom pin assign
 - [Quick Reference](#quick-reference)
   - [Set A Pixel](#set-a-pixel)
   - [Clear the display](#clear-the-display)
+- [S-PWM Panels (Hub75SPWM)](#s-pwm-panels-hub75spwm)
+  - [Timing your frames](#timing-your-frames)
+  - [Tuning](#tuning)
+  - [Statistics](#statistics)
 
 ## Notes On PIO & DMA Limitations
 
@@ -92,3 +96,57 @@ Calling `.clear()` will clear the whole contents of the display
 ```python
 matrix.clear()
 ```
+
+## S-PWM Panels (Hub75SPWM)
+
+Some newer, finer pitch panels use S-PWM driver chips that keep the frame in their own memory and generate the PWM themselves. `Hub75SPWM` drives them. Look at the larger chips on the back of the panel and pick the matching `panel_type`:
+
+* `PANEL_SM16380SH`
+* `PANEL_ICND2055` (untested)
+* `PANEL_FM6373` (untested)
+
+```python
+import hub75
+from picographics import PicoGraphics, DISPLAY_INTERSTATE75_128X64, PEN_RGB888
+
+graphics = PicoGraphics(display=DISPLAY_INTERSTATE75_128X64, pen_type=PEN_RGB888)
+matrix = hub75.Hub75SPWM(128, 64, panel_type=hub75.PANEL_SM16380SH)
+matrix.start()
+
+# draw with graphics...
+matrix.update(graphics)
+```
+
+The width must be a multiple of 16. `color_order` works as for `Hub75`, and `buffer` can be a `bytearray` of `width * height * 4` bytes, the same as `Hub75`. Only one `Hub75SPWM` can run at a time. It uses 5 PIO state machines in two PIOs, and one DMA channel.
+
+`start()` refreshes the panel at a steady 60Hz in the background, and `update(graphics)` converts the image, which takes ~2ms for 128x64. If a frame is being sent, `update()` first waits for the part it converts to be sent, ~2.6ms at most, so a frame never shows half of an update. `update()` can be called from a thread on the other core, so drawing doesn't hold up the rest of your program.
+
+### Timing your frames
+
+The panel shows each image for a whole number of refreshes. If you draw at 25fps while the panel refreshes at 60Hz, images are shown for 2 or 3 refreshes, and scrolling judders. Instead, set a refresh rate that is a multiple of your frame rate, and let `update()` time your frames with `sync`: it waits until `sync` refreshes have been shown since the last `update()` with `sync`, then converts the image between two refreshes:
+
+```python
+matrix.set_refresh_rate(50)
+matrix.start()
+while True:
+    # draw with graphics...
+    matrix.update(graphics, 2)  # each image is shown for exactly 2 refreshes, 25fps
+```
+
+### Tuning
+
+* `set_config_registers(regs)` or `set_config_registers(red, green, blue)`: replace the chip's configuration registers with a profile that suits your panel, eg. from [DMD_STM32's register_test/profiles](https://github.com/board707/DMD_STM32/tree/dev-V2/register_test/profiles). They are sent one per refresh, so all of them are sent within a second. `load_chip_defaults()` restores the built-in ones.
+* `set_brightness(0-255)` and `set_colour_depth(1-10)`: take effect with the next `update()`.
+* `set_avoid_tearing(False)`: never wait for the frame being sent, like `Hub75`. The frame being sent can then show the old image above a line and the new one below it.
+* `set_upload_clock_div(div)`: slow down the frame upload if the image is noisy, 1 (25MHz) by default.
+* `set_refresh_rate(hz)`: 60Hz by default.
+
+### Statistics
+
+`stats()` returns a dictionary with the timings of the last frame and `update()` in microseconds, and `torn_frames`: the number of frames where an upload overtook `update()`, which should stay at 0. If it doesn't, use `sync` or a higher `set_upload_clock_div()`.
+
+```python
+>>> matrix.stats()
+{'upload_us': 2615, 'frame_start_us': 280, 'update_wait_us': 0, 'update_convert_us': 1934, 'torn_frames': 0}
+```
+

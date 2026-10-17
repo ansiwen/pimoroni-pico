@@ -8,6 +8,7 @@ This library offers convenient functions for interacting with [Interstate75](htt
   - [Switches](#switches)
   - [RGB LED](#rgb-led)
 - [Display](#display)
+- [S-PWM Panels](#s-pwm-panels)
 
 
 
@@ -99,3 +100,24 @@ display.line(0, 0, 128, 64)
 board.update()  # Update display with the above items
 ```
 All the picographics functions can be found [Here](../modules/picographics/README.md)
+
+## S-PWM Panels
+
+Some newer, finer pitch panels use S-PWM driver chips, such as the SM16380SH. They need a different driver, which `Interstate75` uses when you pass the chip as the `panel_type`:
+
+```python
+board = interstate75.Interstate75(display=interstate75.DISPLAY_INTERSTATE75_128X64,
+                                  panel_type=interstate75.Interstate75.PANEL_SM16380SH)
+```
+
+The supported chips are `PANEL_SM16380SH`, `PANEL_ICND2055` and `PANEL_FM6373`. The panel is refreshed in the background at a steady rate, 60Hz by default, and `board.update()` only converts the image. If you draw at a lower frame rate, set a refresh rate that is a multiple of it and pass `sync` to let the driver time your frames, so scrolling doesn't judder. For 25fps:
+
+```python
+board.hub75.set_refresh_rate(50)
+while True:
+    # draw...
+    board.update(sync=2)  # each image is shown for exactly 2 refreshes
+```
+
+See [Hub75SPWM](../modules/hub75/README.md#s-pwm-panels-hub75spwm) for all the options.
+

@@ -33,6 +33,10 @@ class Interstate75:
 
     PANEL_GENERIC = hub75.PANEL_GENERIC
     PANEL_FM6126A = hub75.PANEL_FM6126A
+    # Panels with S-PWM driver chips, driven by hub75.Hub75SPWM
+    PANEL_SM16380SH = hub75.PANEL_SM16380SH
+    PANEL_ICND2055 = hub75.PANEL_ICND2055
+    PANEL_FM6373 = hub75.PANEL_FM6373
     COLOR_ORDER_RGB = hub75.COLOR_ORDER_RGB
     COLOR_ORDER_RBG = hub75.COLOR_ORDER_RBG
     COLOR_ORDER_GRB = hub75.COLOR_ORDER_GRB
@@ -55,7 +59,11 @@ class Interstate75:
             out_width = 256
             out_height = 64
 
-        self.hub75 = hub75.Hub75(out_width, out_height, panel_type=panel_type, stb_invert=stb_invert, color_order=color_order)
+        self.spwm = panel_type in (hub75.PANEL_SM16380SH, hub75.PANEL_ICND2055, hub75.PANEL_FM6373)
+        if self.spwm:
+            self.hub75 = hub75.Hub75SPWM(out_width, out_height, panel_type=panel_type, color_order=color_order)
+        else:
+            self.hub75 = hub75.Hub75(out_width, out_height, panel_type=panel_type, stb_invert=stb_invert, color_order=color_order)
         self.hub75.start()
         if self.interstate75w:
             self._switch_pins = self.SWITCH_PINS_W
@@ -72,10 +80,15 @@ class Interstate75:
         # Set up the i2c for Qw/st and Breakout Garden
         self.i2c = PimoroniI2C(self.I2C_SDA_PIN, self.I2C_SCL_PIN, 100000)
 
-    def update(self, buffer=None):
+    def update(self, buffer=None, sync=0):
+        # sync: for S-PWM panels, wait until `sync` frames have been shown since
+        # the last update(), see hub75.Hub75SPWM.update(). Ignored otherwise.
         if buffer is None:
             buffer = self.display
-        self.hub75.update(buffer)
+        if self.spwm:
+            self.hub75.update(buffer, sync)
+        else:
+            self.hub75.update(buffer)
 
     def switch_pressed(self, switch):
         if switch < 0 or switch >= self.NUM_SWITCHES:

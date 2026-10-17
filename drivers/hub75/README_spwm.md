@@ -51,7 +51,9 @@ The frame buffer needs `width * height * 4` bytes of RAM, 32KB for a 128x64 pane
 - LAT: GPIO 12
 - OE: GPIO 13
 
-See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern.
+Pass a `Hub75::COLOR_ORDER` as the last constructor argument if your panel's colours are swapped. It works as in `Hub75`.
+
+See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern. For MicroPython, see `Hub75SPWM` in the [hub75 module](../../micropython/modules/hub75/README.md#s-pwm-panels-hub75spwm).
 
 ## Bring-up and tuning
 
