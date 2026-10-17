@@ -543,7 +543,8 @@ void Hub75SPWM::update(PicoGraphics *graphics, uint sync) {
     // exactly `sync` frames and can't tear. If we're late, sync to the next gap.
     if(sync > 0 && running) {
         uint32_t target = sync_frame + sync;
-        while((int32_t)(frame_number - target) < 0 || state != State::IDLE) tight_loop_contents();
+        // Give up if stop() is called meanwhile, eg. from the other core
+        while(running && ((int32_t)(frame_number - target) < 0 || state != State::IDLE)) tight_loop_contents();
         sync_frame = frame_number;
         wait = absolute_time_diff_us(update_start, get_absolute_time());
     }

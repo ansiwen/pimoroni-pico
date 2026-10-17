@@ -180,7 +180,7 @@ class Hub75SPWM {
 
     int dma_channel = -1;
 
-    bool running = false;
+    volatile bool running = false;  // read by update() on the other core
 
     bool gclk_running = false;
 
