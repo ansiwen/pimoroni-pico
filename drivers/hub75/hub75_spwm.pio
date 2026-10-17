@@ -155,18 +155,50 @@ count3:
 ;
 ; Selects the next row at the start of every scan line (IRQ 0 from
 ; hub75_spwm_clk_cnt), so the row address always follows the chips' internal
-; row counter, however busy the CPU is.
-; X holds 31 - row, Y holds 31 - number of scan rows. Both are loaded by the
-; CPU with pio_sm_exec, which also outputs row 0, before the SM is enabled.
+; row counter, however busy the CPU is. Raises IRQ 1 when it selects row 0, the
+; start of a frame, for the CPU.
+; X holds ~row, Y holds ~number of scan lines. Both are loaded by the CPU with
+; pio_sm_exec, which also outputs row 0, before the SM is enabled. With more
+; than 32 scan lines, A-E repeat rows 0-31.
 
 .wrap_target
     wait 1 irq 0
     jmp x--, check      ; Next row
 check:
     jmp x!=y, output
-    set x, 31           ; Past the last row, back to row 0
+    mov x, ~null        ; Past the last row, back to row 0
+    irq nowait 1
 output:
     mov pins, ~x
+.wrap
+
+
+.program hub75_spwm_rows_shift
+
+; OUT pins are row select A-E
+;
+; For row drivers that are shift registers: at the start of every scan line
+; (IRQ 0 from hub75_spwm_clk_cnt), clocks the selected row one output further,
+; or a new one in for row 0. Raises IRQ 1 when it selects row 0.
+; ISR holds two sequences of 3 states of the A-E pins, 5 bits each, eg. data
+; and latch, then clock, then all low: bits 0-14 select row 0, bits 15-29 the
+; next row. Y holds the number of scan lines - 1, X the scan lines left until
+; row 0. All are loaded by the CPU with pio_sm_exec before the SM is enabled.
+; Each state lasts 32 cycles.
+
+.wrap_target
+    wait 1 irq 0
+    mov osr, isr
+    jmp x--, other_row
+    mov x, y            ; Row 0
+    irq nowait 1
+    jmp output
+other_row:
+    out null, 15        ; The sequence for the next row
+output:
+    out pins, 5 [31]
+    out pins, 5 [31]
+    out pins, 5 [31]
 .wrap
 
 % c-sdk {
@@ -243,13 +275,15 @@ static inline pio_sm_config hub75_spwm_clk_cnt_program_init(PIO pio, uint sm, ui
     return c;
 }
 
-static inline pio_sm_config hub75_spwm_rows_program_init(PIO pio, uint sm, uint offset, uint row_base_pin) {
+static inline pio_sm_config hub75_spwm_rows_program_init(PIO pio, uint sm, uint offset, uint row_base_pin, bool shift) {
     pio_sm_set_consecutive_pindirs(pio, sm, row_base_pin, 5, true);
     for (uint i = row_base_pin; i < row_base_pin + 5; ++i)
         pio_gpio_init(pio, i);
 
-    pio_sm_config c = hub75_spwm_rows_program_get_default_config(offset);
+    pio_sm_config c = shift ? hub75_spwm_rows_shift_program_get_default_config(offset)
+                            : hub75_spwm_rows_program_get_default_config(offset);
     sm_config_set_out_pins(&c, row_base_pin, 5);
+    sm_config_set_out_shift(&c, true, false, 32);
     pio_sm_init(pio, sm, offset, &c);
     return c;
 }

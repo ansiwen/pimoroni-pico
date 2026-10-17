@@ -46,10 +46,35 @@ class Hub75SPWM {
         FM6373,
     };
 
+    // Which pixels the two sets of data lines (lanes) drive. Each scan line,
+    // both lanes send `chain` pixels, one channel of a chip each.
+    enum class Lanes {
+        // R0, G0, B0 the top half, R1, G1, B1 the bottom half, eg. 1/32 scan on
+        // 64 rows: height / 2 scan lines, chain = width
+        HALVES,
+        // Only R0, G0, B0: height scan lines, chain = width. Uses twice the RAM.
+        SINGLE,
+        // R0, G0, B0 the left half, R1, G1, B1 the right half: height scan
+        // lines, chain = width / 2
+        LEFT_RIGHT,
+    };
+
+    // How the rows are selected
+    enum class RowDriver {
+        // A-E are a binary row address, up to 32 rows (74HC138-like decoders,
+        // SM5166, RUC7258, ...)
+        DECODER,
+        // A shift register with a single active output, eg. for 1/64 scan:
+        // clocked once per scan line, see row_shift_clk, _lat and _data
+        SHIFT_REGISTER,
+    };
+
     uint width;
     uint height;
-    uint scan_rows;     // number of multiplexed rows, height / 2
     Chip chip;
+    Lanes lanes = Lanes::HALVES;
+    uint scan_lines;    // number of multiplexed rows (scan lines)
+    uint chain;         // pixels per lane and scan line, a multiple of 16
 
     // 0 (off) - 255 (full brightness)
     uint8_t brightness = 255;
@@ -57,6 +82,21 @@ class Hub75SPWM {
     // Number of significant bits (1 - 10) of the gamma corrected colour
     // sent to the panel. DMD_STM32 only sends 4 bits.
     uint colour_depth = 10;
+
+    // Row selection, applied by start(). For SHIFT_REGISTER, which of A-E
+    // (0-4) is the shift register's clock, latch and data input; the latch is
+    // high while the data is clocked in, like DMD_STM32's DMD_Mux595. Set
+    // row_shift_lat to a value > 4 for row drivers without a latch.
+    RowDriver row_driver = RowDriver::DECODER;
+    uint row_shift_clk = 0;
+    uint row_shift_lat = 1;
+    uint row_shift_data = 2;
+    bool row_shift_data_inverted = false;  // the selected row is shifted in as 0
+
+    // CLKs per scan line with OE (GCLK) low, high, low, applied from the next frame
+    uint gclk_d1 = 28;
+    uint gclk_d2 = 4;
+    uint gclk_d3 = 96;
 
     // Interstate 75 (W) pinout
     uint pin_r0 = 0;      // R0, G0, B0, R1, G1, B1 must be consecutive
@@ -83,13 +123,29 @@ class Hub75SPWM {
     // Restore the built-in configuration registers for the chip
     void load_chip_defaults();
 
-    // Size of the frame buffer in 32-bit words: width * height, the same RAM as Hub75
-    uint buffer_size() const { return width * height; }
+    // Change the lane layout, only while stopped. Sets scan_lines and chain and
+    // clears the frame buffer. Returns false if the frame buffer passed to the
+    // constructor is too small.
+    bool set_lanes(Lanes lanes);
+
+    // Bit position + 1 of the greyscale MSB in the chips' 16-bit words, 12-15.
+    // Chip specific, eg. 13 for the SM16380SH: with a value too high, bright
+    // colours clip. Applied from the next frame.
+    void set_gclk_bits(uint bits);
+    uint get_gclk_bits() const { return gclk_bits; }
+
+    // Size of the frame buffer in 32-bit words: width * height for HALVES and
+    // LEFT_RIGHT, the same RAM as Hub75, twice that for SINGLE
+    uint buffer_size() const { return scan_lines * chain * 2; }
 
     // Brightness and colour depth are applied when a pixel is set.
     // Writes straight to the frame buffer, use update() to avoid tearing.
     void set_pixel(uint x, uint y, uint8_t r, uint8_t g, uint8_t b);
     void clear();
+
+    // For finding out how a panel is wired: set chain position `pos` of `lane`
+    // (0: R0, G0, B0, 1: R1, G1, B1) in scan line `line`, whatever the layout
+    void set_chain_pixel(uint line, uint pos, uint lane, uint8_t r, uint8_t g, uint8_t b);
 
     // Start/stop refreshing the panel at the refresh rate in the background (timer and DMA
     // interrupts, ~0.5ms of CPU per frame). Only one instance can run at a time.
@@ -144,7 +200,7 @@ class Hub75SPWM {
     uint32_t update_convert_us = 0;
 
     private:
-    static const uint MAX_CONFIG_REGISTERS = 40;
+    static const uint MAX_CONFIG_REGISTERS = 48;
     static const uint CHANNELS_PER_CHIP = 16;
 
     // Position of the colour for the R, G and B pins in an RGB888 colour
@@ -153,6 +209,7 @@ class Hub75SPWM {
     // Greyscale data as it is clocked out, see hub75_spwm_pack.hpp
     uint32_t *frame_buffer = nullptr;
     bool managed_buffer = false;
+    uint buffer_words = 0;   // allocated or passed to the constructor
 
     // Bit position + 1 of the greyscale MSB in the chip's 16-bit word
     uint gclk_bits = 14;
@@ -174,6 +231,8 @@ class Hub75SPWM {
     uint clk_lat_prog_offs = 0;
     uint clk_cnt_prog_offs = 0;
     uint rows_prog_offs = 0;
+    const pio_program_t *rows_program = nullptr;
+    bool rows_shift_initialised = false;
     pio_sm_config frame_config;
     pio_sm_config regs_config;
     pio_sm_config clk_lat_config;
@@ -203,8 +262,9 @@ class Hub75SPWM {
     uint upload_line();
     void finish_frame();
     uint32_t greyscale(uint8_t v);
-
-    uint current_row();
+    void map_pixel(uint x, uint y, uint &pos, uint &line, uint &lane) const;
+    uint32_t row_shift_sequence(bool data) const;
+    void row_shift_exec(uint32_t sequence);
 
     void send_clocks(uint count, bool lat = false);
     void send_latches(uint count) { send_clocks(count, true); }
