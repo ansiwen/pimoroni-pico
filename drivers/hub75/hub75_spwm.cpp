@@ -395,10 +395,8 @@ void Hub75SPWM::init_mux() {
 void Hub75SPWM::start_gclk() {
     pio_sm_init(pio_gclk, sm_clk_cnt, clk_cnt_prog_offs, &clk_cnt_config);
 
-    // Three segments of 9 bits: (clocks - 1) in the low 8 bits, OE level in the MSB
-    uint32_t control = (GCLK_D3 - 1);
-    control = (control << 9) | (1 << 8) | (GCLK_D2 - 1);
-    control = (control << 9) | (GCLK_D1 - 1);
+    // Clocks - 1 of the three segments (OE low, high, low), 8 bits each
+    uint32_t control = (GCLK_D3 - 1) << 16 | (GCLK_D2 - 1) << 8 | (GCLK_D1 - 1);
     pio_sm_put(pio_gclk, sm_clk_cnt, control);
     pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_pull(false, true));
     pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_mov(pio_isr, pio_osr)); // Keep a copy

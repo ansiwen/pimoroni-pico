@@ -42,7 +42,7 @@ int main() {
 }
 ```
 
-The driver uses 5 state machines in two PIOs, and one DMA channel. It picks the PIOs at `start()`: one for the frame, register and command programs (3 state machines, 31 instructions) and another for clock counting and row switching (2 state machines, 14 instructions). The row address is switched by PIO, so the display doesn't depend on interrupt latency.
+The driver uses 5 state machines in two PIOs, and one DMA channel. It picks the PIOs at `start()`: one for the frame, register and command programs (3 state machines, 31 instructions) and another for clock counting and row switching (2 state machines, 19 instructions). The row address is switched by PIO, so the display doesn't depend on interrupt latency.
 
 The frame buffer needs `width * height * 4` bytes of RAM, 32KB for a 128x64 panel, the same as `Hub75`, plus the PicoGraphics frame buffer. You can pass your own buffer of `buffer_size()` words to the constructor. The buffer holds the greyscale data in the order it is sent to the panel, with only the 10 significant bits of each 16-bit word (see `hub75_spwm_pack.hpp`), so a frame is sent with a single DMA transfer. The PIO adds the constant zero bits and the data latches. The default pins match Interstate 75 and Interstate 75 W:
 - R0-B1: GPIO 0-5

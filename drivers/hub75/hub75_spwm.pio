@@ -112,29 +112,39 @@ public free_run:
 
 
 .program hub75_spwm_clk_cnt
+.side_set 1 opt
 
 ; IN pin is CLK
-; OUT pin is OE (used as GCLK)
+; Side-set and OUT pin is OE (used as GCLK), OUT is only used by exec
 ;
-; Counts CLK rising edges and drives OE through three segments per scan line.
-; ISR and OSR hold a control word with three 9-bit fields, loaded by the CPU
-; with `pull` and `mov isr, osr` before the SM is enabled:
-; - number of CLKs - 1 (8 LSBs)
-; - OE level (MSB)
+; Counts CLK rising edges and drives OE through three segments per scan line:
+; low, high, low. ISR and OSR hold a control word with the number of CLKs - 1
+; of each segment in 8 bits, first segment in the LSBs, loaded by the CPU with
+; `pull` and `mov isr, osr` before the SM is enabled.
 ; At the start of each scan line, IRQ 0 is raised so hub75_spwm_rows switches
 ; the row address lines.
+;
+; The segments are unrolled so that only 3 instructions run between the last
+; CLK of a scan line and the wait for the next one: at 25MHz (6 cycles per CLK)
+; a loop over the segments missed one CLK per scan line.
 
 .wrap_target
-    irq nowait 0        ; hub75_spwm_rows selects the next row
-    set y, 2            ; Three segments
-segment:
-    out x, 8
-    out pins, 1
-count:
+    out x, 8            side 0  ; First segment, OE low
+    irq nowait 0                ; hub75_spwm_rows selects the next row
+count1:
     wait 0 pin 0
     wait 1 pin 0
-    jmp x--, count
-    jmp y--, segment
+    jmp x--, count1
+    out x, 8            side 1  ; Second segment, OE high
+count2:
+    wait 0 pin 0
+    wait 1 pin 0
+    jmp x--, count2
+    out x, 8            side 0  ; Third segment, OE low
+count3:
+    wait 0 pin 0
+    wait 1 pin 0
+    jmp x--, count3
     mov osr, isr
 .wrap
 
@@ -227,6 +237,7 @@ static inline pio_sm_config hub75_spwm_clk_cnt_program_init(PIO pio, uint sm, ui
     sm_config_set_clkdiv(&c, clkdiv);
     sm_config_set_in_pins(&c, clk_pin);
     sm_config_set_out_pins(&c, oe_pin, 1);
+    sm_config_set_sideset_pins(&c, oe_pin);
     sm_config_set_out_shift(&c, true, false, 32);
     pio_sm_init(pio, sm, offset, &c);
     return c;
