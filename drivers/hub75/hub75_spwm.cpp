@@ -22,9 +22,6 @@ static const uint MAX_CLK_MHZ = 15;
 // Frame rate of the background refresh
 static const int64_t FRAME_US = 1000000 / 60;
 
-// Retry delay when a frame is due while update() writes the frame buffer
-static const int64_t FRAME_RETRY_US = 200;
-
 // The driver that the DMA IRQ handler belongs to (only one instance is supported)
 static Hub75SPWM *instance = nullptr;
 
@@ -442,14 +439,11 @@ int64_t Hub75SPWM::frame_alarm_callback(alarm_id_t, void *user_data) {
 }
 
 int64_t Hub75SPWM::start_frame() {
-    // update() is writing to the frame buffer, try again shortly
-    if(converting) return FRAME_RETRY_US;
     // The previous upload hasn't finished (shouldn't happen at 60Hz)
     if(state != State::IDLE) return -FRAME_US;
 
     state = State::SYNCING;
     absolute_time_t start = get_absolute_time();
-    next_frame_due = delayed_by_us(start, FRAME_US);
 
     // DMD_STM32 order: each frame is shown at the next frame's VSYNC, 1 frame later
     stop_gclk();
@@ -464,6 +458,7 @@ int64_t Hub75SPWM::start_frame() {
     pio_sm_exec(pio, sm_frame, pio_encode_out(pio_null, 32));      // Empty OSR so the data is autopulled
     pio_sm_set_enabled(pio, sm_frame, true);
 
+    frame_number = frame_number + 1;
     state = State::UPLOADING;
     dma_channel_acknowledge_irq1(dma_channel); // Clear completions of the register writes
     dma_channel_set_irq1_enabled(dma_channel, true);
@@ -497,48 +492,65 @@ void __not_in_flash_func(Hub75SPWM::start_dclk)() {
     pio_sm_set_enabled(pio, sm_clk_lat, true);
 }
 
-void Hub75SPWM::update(PicoGraphics *graphics) {
-    // Convert between frame uploads, so a frame never shows half of an update,
-    // and only when the conversion ends before the next frame is due, so it doesn't
-    // delay frames (irregular frame timing makes the panel flicker).
-    while(running) {
-        while(state != State::IDLE) tight_loop_contents();
-        int64_t time_left = absolute_time_diff_us(get_absolute_time(), next_frame_due);
-        if(time_left < (int64_t)convert_us + 500) {
-            // Not enough time left: wait for the next frame to start, then try again
-            while(state == State::IDLE) tight_loop_contents();
-            continue;
-        }
-        converting = true;
-        __dmb();
-        // The frame alarm could have fired between the check and setting the flag
-        if(state == State::IDLE) break;
-        converting = false;
-    }
-    absolute_time_t convert_start = get_absolute_time();
+// The first scan line that the frame upload hasn't read yet, or scan_rows if
+// no upload is running
+uint Hub75SPWM::upload_line() {
+    if(state != State::UPLOADING) return scan_rows;
+    uint32_t read = (uint32_t)dma_channel_hw_addr(dma_channel)->read_addr - (uint32_t)frame_buffer;
+    return read / (sizeof(uint32_t) * 2 * width); // 2 words per column
+}
 
-    if(graphics->pen_type == PicoGraphics::PEN_RGB888) {
-        uint32_t *p = (uint32_t *)graphics->frame_buffer;
-        for(auto y = 0u; y < height; y++) {
-            for(auto x = 0u; x < width; x++) {
-                uint32_t c = *p++;
-                set_pixel(x, y, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff);
-            }
-        }
-    } else {
+void Hub75SPWM::update(PicoGraphics *graphics) {
+    // Gamma, colour depth and brightness for every 8-bit value
+    uint16_t lut[256];
+    for(auto i = 0u; i < 256; i++) lut[i] = greyscale(i);
+
+    if(graphics->pen_type != PicoGraphics::PEN_RGB888) {
+        // Converted row by row, wait for the current upload to finish first.
+        // A frame that starts while converting can show part of the update.
+        while(state != State::IDLE) tight_loop_contents();
         uint offset = 0;
-        graphics->frame_convert(PicoGraphics::PEN_RGB888, [this, &offset](void *data, size_t length) {
+        graphics->frame_convert(PicoGraphics::PEN_RGB888, [this, &offset, &lut](void *data, size_t length) {
             uint32_t *p = (uint32_t *)data;
             for(auto i = 0u; i < length / sizeof(RGB888); i++) {
                 uint32_t c = *p++;
-                set_pixel(offset % width, offset / width, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff);
+                uint x = offset % width, y = offset / width;
+                if(y < height) {
+                    hub75_spwm_pack::set(frame_buffer, x, y, width, scan_rows,
+                        lut[(c >> 16) & 0xff], lut[(c >> 8) & 0xff], lut[c & 0xff]);
+                }
                 offset++;
             }
         });
+        return;
     }
 
-    convert_us = absolute_time_diff_us(convert_start, get_absolute_time());
-    converting = false;
+    // Convert scan line by scan line, in the order they are uploaded, so a frame
+    // never shows half of an update, without delaying the frames:
+    // - If an upload is running, only convert lines it has already read, so that
+    //   frame is entirely old. Converting is faster than uploading, so this
+    //   finishes just after the upload.
+    // - Otherwise convert straight away. If an upload starts meanwhile, it can't
+    //   catch up with the conversion, so that frame is entirely new.
+    // The interrupts can run on the other core, only state, frame_number and
+    // the DMA position are shared.
+    const uint32_t *src = (const uint32_t *)graphics->frame_buffer;
+    bool behind = state == State::UPLOADING;
+    uint32_t frame = frame_number;
+
+    for(auto line = 0u; line < scan_rows; line++) {
+        if(behind) {
+            while(frame_number == frame && upload_line() <= line) tight_loop_contents();
+        }
+        const uint32_t *top = &src[line * width];
+        const uint32_t *bottom = &src[(line + scan_rows) * width];
+        for(auto x = 0u; x < width; x++) {
+            uint32_t c0 = top[x], c1 = bottom[x];
+            hub75_spwm_pack::set_pair(frame_buffer, x, line, width, scan_rows,
+                lut[(c0 >> 16) & 0xff], lut[(c0 >> 8) & 0xff], lut[c0 & 0xff],
+                lut[(c1 >> 16) & 0xff], lut[(c1 >> 8) & 0xff], lut[c1 & 0xff]);
+        }
+    }
 }
 
 }

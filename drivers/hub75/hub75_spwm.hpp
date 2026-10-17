@@ -95,11 +95,11 @@ class Hub75SPWM {
     void start();
     void stop();
 
-    // Convert a PicoGraphics frame buffer into the frame buffer. Waits until the
-    // current frame has been sent, and holds back the next one while converting,
-    // so a frame never shows half of an update. It is shown with the next frame
-    // after the following one (~17-33ms). Must be called from the core that
-    // called start().
+    // Convert a PicoGraphics frame buffer into the frame buffer, in sync with the
+    // background refresh so a frame never shows half of an update (for PEN_RGB888).
+    // Takes ~3.5ms for 128x64, up to the rest of a running upload (~8ms).
+    // It is shown with the frame after the following one (~17-33ms).
+    // Can be called from either core.
     void update(PicoGraphics *graphics);
 
     // CPU time of the last background frame start in microseconds (for testing)
@@ -148,14 +148,13 @@ class Hub75SPWM {
     // Background refresh
     enum class State { IDLE, SYNCING, UPLOADING };
     volatile State state = State::IDLE;
-    volatile bool converting = false;
+    volatile uint32_t frame_number = 0;
     alarm_id_t frame_alarm = 0;
-    absolute_time_t next_frame_due = nil_time;
-    uint32_t convert_us = 0;  // How long update() took to convert the last frame
 
     static int64_t frame_alarm_callback(alarm_id_t id, void *user_data);
     static void dma_irq_handler();
     int64_t start_frame();
+    uint upload_line();
     void finish_frame();
     uint32_t greyscale(uint8_t v);
 

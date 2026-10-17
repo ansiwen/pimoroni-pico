@@ -67,5 +67,15 @@ namespace hub75_spwm_pack {
         return changed;
     }
 
+    // Write the 10-bit greyscale values of the pixels in column x of scan line
+    // `line` in the top half (r0, g0, b0) and in the bottom half (r1, g1, b1)
+    inline void set_pair(uint32_t *buffer, uint32_t x, uint32_t line, uint32_t width, uint32_t scan_rows,
+                         uint32_t r0, uint32_t g0, uint32_t b0, uint32_t r1, uint32_t g1, uint32_t b1) {
+        uint32_t *w = &buffer[word_index(x, line, width, scan_rows)];
+        const uint32_t *t = SPREAD5.t;
+        w[0] = t[r0 >> 5] | t[g0 >> 5] << 1 | t[b0 >> 5] << 2 | t[r1 >> 5] << 3 | t[g1 >> 5] << 4 | t[b1 >> 5] << 5;
+        w[1] = t[r0 & 31] | t[g0 & 31] << 1 | t[b0 & 31] << 2 | t[r1 & 31] << 3 | t[g1 & 31] << 4 | t[b1 & 31] << 5;
+    }
+
 }
 }
