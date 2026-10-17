@@ -74,8 +74,12 @@ class Hub75SPWM {
     // Replace the chip configuration registers, eg. with a profile from
     // DMD_STM32's register_test/profiles that matches your panel.
     // Register 0x02 (scan lines) is always set to match the panel height.
-    // Takes effect on the next frames: one register is sent per frame.
+    // If the clocks are running, all registers are sent immediately.
     void set_config_registers(const uint16_t *regs, uint count);
+    // As above, with separate values for the red, green and blue drivers
+    void set_config_registers(const uint16_t *red, const uint16_t *green, const uint16_t *blue, uint count);
+    // Restore the built-in configuration registers for the chip
+    void load_chip_defaults();
 
     void set_pixel(uint x, uint y, uint8_t r, uint8_t g, uint8_t b);
     void clear();
@@ -89,6 +93,8 @@ class Hub75SPWM {
     void refresh();
 
     // Copy a PicoGraphics frame buffer to the back buffer and upload it to the panel.
+    // Skips the upload if neither the image, brightness nor colour_depth changed,
+    // since every upload briefly disturbs the panel's PWM.
     void update(PicoGraphics *graphics);
 
     private:
@@ -101,7 +107,7 @@ class Hub75SPWM {
     // Bit position + 1 of the greyscale MSB in the chip's 16-bit word
     uint gclk_bits = 14;
 
-    uint16_t config_registers[MAX_CONFIG_REGISTERS];
+    uint16_t config_registers[3][MAX_CONFIG_REGISTERS]; // red, green, blue
     uint config_register_count = 0;
     uint next_config_register = 0;
 
@@ -123,11 +129,16 @@ class Hub75SPWM {
     uint8_t *line_buffer[2] = {nullptr, nullptr};
 
     bool running = false;
+
+    // Set when the back buffer or display settings differ from the panel
+    bool dirty = true;
+    uint8_t uploaded_brightness = 0;
+    uint uploaded_colour_depth = 0;
     volatile bool gclk_running = false;
     volatile bool gclk_stop_requested = false;
     volatile uint row = 0;
 
-    void load_chip_defaults();
+    void send_all_config_registers();
 
     void set_row(uint r);
 
@@ -135,7 +146,8 @@ class Hub75SPWM {
     void send_latches(uint count) { send_clocks(count, 0b01); }
     void send_oe(uint count) { send_clocks(count, 0b10); }
     void send_vsync();
-    void send_register(uint16_t value, uint latches);
+    void send_register(uint16_t value, uint latches) { send_register(value, value, value, latches); }
+    void send_register(uint16_t red, uint16_t green, uint16_t blue, uint latches);
     void restart_data_sm(uint latches);
     void wait_data_sm();
 

@@ -83,16 +83,34 @@ void Hub75SPWM::load_chip_defaults() {
 }
 
 void Hub75SPWM::set_config_registers(const uint16_t *regs, uint count) {
+    set_config_registers(regs, regs, regs, count);
+}
+
+void Hub75SPWM::set_config_registers(const uint16_t *red, const uint16_t *green, const uint16_t *blue, uint count) {
     count = std::min(count, MAX_CONFIG_REGISTERS);
-    memcpy(config_registers, regs, count * sizeof(uint16_t));
+    memcpy(config_registers[0], red, count * sizeof(uint16_t));
+    memcpy(config_registers[1], green, count * sizeof(uint16_t));
+    memcpy(config_registers[2], blue, count * sizeof(uint16_t));
     config_register_count = count;
     next_config_register = 0;
 
     // Register 0x02 holds the number of scan lines - 1
-    for(auto i = 0u; i < count; i++) {
-        if((config_registers[i] >> 8) == 0x02) {
-            config_registers[i] = 0x0200 | ((scan_rows - 1) & 0xff);
+    for(auto c = 0u; c < 3; c++) {
+        for(auto i = 0u; i < count; i++) {
+            if((config_registers[c][i] >> 8) == 0x02) {
+                config_registers[c][i] = 0x0200 | ((scan_rows - 1) & 0xff);
+            }
         }
+    }
+
+    if(running) send_all_config_registers();
+}
+
+// One register is sent per frame upload, so upload one frame per register
+void Hub75SPWM::send_all_config_registers() {
+    for(auto i = 0u; i < config_register_count; i++) {
+        refresh();
+        sleep_ms(3);
     }
 }
 
@@ -103,13 +121,19 @@ void Hub75SPWM::set_pixel(uint x, uint y, uint8_t r, uint8_t g, uint8_t b) {
         y -= scan_rows;
         half = 1;
     }
-    back_buffer[(y * width + x) * 2 + half] = Pixel(r, g, b);
+    Pixel p(r, g, b);
+    Pixel &dest = back_buffer[(y * width + x) * 2 + half];
+    if(dest.color != p.color) {
+        dest = p;
+        dirty = true;
+    }
 }
 
 void Hub75SPWM::clear() {
     for(auto i = 0u; i < width * height; i++) {
         back_buffer[i] = Pixel();
     }
+    dirty = true;
 }
 
 void Hub75SPWM::set_row(uint r) {
@@ -155,10 +179,7 @@ void Hub75SPWM::start(irq_handler_t handler) {
     running = true;
 
     // Send every config register once, then start displaying
-    for(auto i = 0u; i < config_register_count; i++) {
-        refresh();
-        sleep_ms(3);
-    }
+    send_all_config_registers();
 }
 
 void Hub75SPWM::stop(irq_handler_t handler) {
@@ -255,13 +276,17 @@ void Hub75SPWM::wait_data_sm() {
     pio_interrupt_clear(pio, 7);
 }
 
-// Send the same 16-bit register value to every chip on every RGB line
-void Hub75SPWM::send_register(uint16_t value, uint latches) {
+// Send a 16-bit register value to every chip, with separate values for the
+// red, green and blue drivers of both halves
+void Hub75SPWM::send_register(uint16_t red, uint16_t green, uint16_t blue, uint latches) {
     // DMA ring mode requires the buffer to be aligned to its size
     static uint8_t reg[16] __attribute__((aligned(16)));
 
     for(auto bit = 0u; bit < 16; bit++) {
-        reg[bit] = (value & (0x8000 >> bit)) ? 0b111111 : 0;
+        uint16_t mask = 0x8000 >> bit;
+        reg[bit] = ((red & mask) ? 0b001001 : 0)
+                 | ((green & mask) ? 0b010010 : 0)
+                 | ((blue & mask) ? 0b100100 : 0);
     }
 
     restart_data_sm(latches);
@@ -323,7 +348,7 @@ void Hub75SPWM::stop_gclk() {
 
 // Send VSYNC and the next config register (one per frame, round-robin)
 void Hub75SPWM::load_config_register() {
-    uint16_t value = config_registers[next_config_register];
+    uint i = next_config_register;
     next_config_register++;
     if(next_config_register >= config_register_count) next_config_register = 0;
 
@@ -341,7 +366,7 @@ void Hub75SPWM::load_config_register() {
     // Register writes are framed by 0x00AA 0x01AA before and 0x0055 0x0155 after
     send_register(0x00aa, 5);
     send_register(0x01aa, 5);
-    send_register(value, 5);
+    send_register(config_registers[0][i], config_registers[1][i], config_registers[2][i], 5);
     send_register(0x0055, 5);
     send_register(0x0155, 5);
 }
@@ -408,6 +433,10 @@ void Hub75SPWM::data_transfer() {
 void Hub75SPWM::refresh() {
     if(!running) return;
 
+    dirty = false;
+    uploaded_brightness = brightness;
+    uploaded_colour_depth = colour_depth;
+
     stop_gclk();
     load_config_register();
     data_transfer();
@@ -439,7 +468,10 @@ void Hub75SPWM::update(PicoGraphics *graphics) {
             }
         });
     }
-    refresh();
+
+    if(dirty || brightness != uploaded_brightness || colour_depth != uploaded_colour_depth) {
+        refresh();
+    }
 }
 
 }

@@ -65,6 +65,10 @@ See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern.
     hub75.set_config_registers(regs, count_of(regs));
     ```
 
-    Call this before `start()`. Register `0x02` (scan lines) is always overwritten to match the panel height.
+    Most profiles have different values for the red, green and blue drivers. To use all three, call `set_config_registers(red, green, blue, count)`. `examples/interstate75/sm16380sh_profiles.hpp` contains every SM16380SH 1/32 scan profile. The test example can switch between them with button B.
+
+    You can call this before or after `start()`. If the clocks are running, all registers are sent immediately, which takes about half a second. Register `0x02` (scan lines) is always overwritten to match the panel height.
 3. If dark colours flicker or show noise, try a lower `hub75.colour_depth`. The default is 10 bits; DMD_STM32 uses 4.
 4. `hub75.brightness` (0-255) scales the greyscale values sent to the panel. It takes effect on the next `update()`.
+
+Each upload briefly disturbs the panel's PWM, so `update()` skips the upload when the image, `brightness` and `colour_depth` are unchanged. `refresh()` always uploads.
