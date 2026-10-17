@@ -158,14 +158,11 @@ void Hub75SPWM::start(irq_handler_t handler) {
     clk_lat_prog_offs = pio_add_program(pio, &hub75_spwm_clk_lat_program);
     clk_cnt_prog_offs = pio_add_program(pio, &hub75_spwm_clk_cnt_program);
 
-    // Integer dividers keep the CLK below MAX_CLK_MHZ (data SM: 6 cycles per clock, clk_lat: 2).
-    // clk_lat runs at half the speed so free_run_matched has the same timing as
-    // the data SM (3 and 6 at 150MHz).
-    uint data_clkdiv = 1 + cycles_per_us / (MAX_CLK_MHZ * 5);
+    // Integer dividers keep the CLK below MAX_CLK_MHZ (data SM: 6 cycles per clock, clk_lat: 2)
     data_config = hub75_spwm_data_program_init(pio, sm_data, data_prog_offs,
-        data_clkdiv, pin_r0, pin_lat, pin_clk);
+        1 + cycles_per_us / (MAX_CLK_MHZ * 5), pin_r0, pin_lat, pin_clk);
     clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs,
-        data_clkdiv * 2, pin_lat, pin_clk);
+        1 + cycles_per_us / (MAX_CLK_MHZ * 2), pin_lat, pin_clk);
     clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio, sm_clk_cnt, clk_cnt_prog_offs,
         1, pin_clk, pin_oe);
     pio_sm_set_enabled(pio, sm_clk_lat, true);
@@ -470,12 +467,11 @@ void Hub75SPWM::refresh() {
 
 // Free-running CLK is the reference clock (DCLK) for the chips' PWM
 void Hub75SPWM::start_dclk() {
-    uint offset = dclk_matched ? hub75_spwm_clk_lat_offset_free_run_matched : hub75_spwm_clk_lat_offset_free_run;
-    pio_sm_init(pio, sm_clk_lat, clk_lat_prog_offs + offset, &clk_lat_config);
+    pio_sm_init(pio, sm_clk_lat, clk_lat_prog_offs + hub75_spwm_clk_lat_offset_free_run, &clk_lat_config);
     pio_sm_set_enabled(pio, sm_clk_lat, true);
 }
 
-void Hub75SPWM::update(PicoGraphics *graphics) {
+void Hub75SPWM::update(PicoGraphics *graphics, bool force) {
     if(graphics->pen_type == PicoGraphics::PEN_RGB888) {
         uint32_t *p = (uint32_t *)graphics->frame_buffer;
         for(auto y = 0u; y < height; y++) {
@@ -496,7 +492,7 @@ void Hub75SPWM::update(PicoGraphics *graphics) {
         });
     }
 
-    if(dirty || brightness != uploaded_brightness || colour_depth != uploaded_colour_depth) {
+    if(force || dirty || brightness != uploaded_brightness || colour_depth != uploaded_colour_depth) {
         refresh();
     }
 }

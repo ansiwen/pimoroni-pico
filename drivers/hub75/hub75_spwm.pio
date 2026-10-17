@@ -63,12 +63,6 @@ public free_run:
     nop                 side 0
     jmp free_run        side 1
 
-; The same shape as the clocks from hub75_spwm_data (1 cycle high, 2 low at
-; twice its clock divider), so the rows run at the same rate during uploads.
-public free_run_matched:
-    nop                 side 0 [1]
-    jmp free_run_matched side 1
-
 
 .program hub75_spwm_clk_cnt
 

@@ -62,11 +62,6 @@ class Hub75SPWM {
     // In DMD_STM32's order (false) each frame is only shown at the next upload.
     bool vsync_after_data = false;
 
-    // Experimental: run DCLK at the same rate as the data clock (8.3MHz instead
-    // of 12.5MHz at 150MHz), so the rows don't slow down while uploading.
-    // Takes effect on the next upload.
-    bool dclk_matched = false;
-
     // Interstate 75 (W) pinout
     uint pin_r0 = 0;      // R0, G0, B0, R1, G1, B1 must be consecutive
     uint pin_row_a = 6;   // A, B, C, D, E must be consecutive
@@ -103,8 +98,8 @@ class Hub75SPWM {
 
     // Copy a PicoGraphics frame buffer to the back buffer and upload it to the panel.
     // Skips the upload if neither the image, brightness nor colour_depth changed,
-    // since every upload briefly disturbs the panel's PWM.
-    void update(PicoGraphics *graphics);
+    // since every upload briefly disturbs the panel's PWM, unless `force` is set.
+    void update(PicoGraphics *graphics, bool force = false);
 
     private:
     static const uint MAX_CONFIG_REGISTERS = 40;

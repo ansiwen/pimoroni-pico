@@ -11,9 +11,9 @@
 Test pattern and tuning tool for HUB75 panels with S-PWM driver chips.
 
 Button A short press: next pattern
-Button A long press:  next mode: V0 D0, V0 D1, V1 D0, V1 D1
+Button A long press:  next mode: C0 V0, C1 V0, C0 V1, C1 V1
+                      C1 = upload every frame at a steady 60Hz, even if unchanged
                       V1 = VSYNC after the frame data (vsync_after_data)
-                      D1 = DCLK matched to the data clock (dclk_matched)
 Button B short press: next register profile (SM16380SH 1/32 scan)
 Button B long press:  next brightness
 
@@ -159,6 +159,9 @@ int main() {
   uint pattern = 0;
   uint profile = 2;
   uint mode = 0;
+  bool continuous = false;
+  uint frame = 0;
+  absolute_time_t next_frame = get_absolute_time();
   uint brightness = 0;
   int offset = 0;
   uint32_t overlay_until = to_ms_since_boot(get_absolute_time()) + 2000;
@@ -174,7 +177,7 @@ int main() {
         break;
       case PressDetector::LONG:
         mode = (mode + 1) % 4;
-        hub75.dclk_matched = mode & 1;
+        continuous = mode & 1;
         hub75.vsync_after_data = mode & 2;
         changed = true;
         break;
@@ -199,9 +202,9 @@ int main() {
 
     if(changed) {
       overlay_until = now + 2000;
-      printf("pattern %u, R%u (%s), vsync %s data, DCLK %s, brightness %u\n",
+      printf("pattern %u, R%u (%s), vsync %s data, %s, brightness %u\n",
         pattern, profile, profile_name(profile), hub75.vsync_after_data ? "after" : "before",
-        hub75.dclk_matched ? "matched" : "12.5MHz", hub75.brightness);
+        continuous ? "upload at 60Hz" : "upload on change", hub75.brightness);
     }
 
     graphics.set_pen(0, 0, 0);
@@ -221,7 +224,7 @@ int main() {
 
     if(now < overlay_until) {
       char label[32];
-      snprintf(label, sizeof(label), "R%u V%u D%u B%u", profile, hub75.vsync_after_data ? 1 : 0, hub75.dclk_matched ? 1 : 0, hub75.brightness);
+      snprintf(label, sizeof(label), "R%u C%u V%u B%u", profile, continuous ? 1 : 0, hub75.vsync_after_data ? 1 : 0, hub75.brightness);
       graphics.set_pen(0, 0, 0);
       graphics.rectangle(Rect(0, 0, graphics.measure_text(label, 1) + 2, 9));
       graphics.set_pen(255, 255, 255);
@@ -229,7 +232,23 @@ int main() {
     }
 
     // Only uploads to the panel if the image or settings changed
+    if(continuous) {
+      // Upload every frame at a fixed rate, so every displayed frame has the same timing
+      absolute_time_t start = get_absolute_time();
+      hub75.update(&graphics, true);
+      int64_t upload_us = absolute_time_diff_us(start, get_absolute_time());
+      if(++frame % 60 == 0) printf("upload %lldus\n", upload_us); // once per second
+
+      next_frame = delayed_by_us(next_frame, 1000000 / 60);
+      if(absolute_time_diff_us(get_absolute_time(), next_frame) < 0) {
+        next_frame = get_absolute_time(); // Too slow for 60Hz, don't try to catch up
+      }
+      sleep_until(next_frame);
+      continue;
+    }
+
     hub75.update(&graphics);
+    next_frame = get_absolute_time();
 
     sleep_ms(pattern == 2 ? 20 : 10);
   }
