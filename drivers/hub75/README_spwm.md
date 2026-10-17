@@ -16,7 +16,7 @@ You can identify the chips from the markings on the larger ICs on the back of th
 
 | Chip      | `Hub75SPWM::Chip` | Status                                      |
 |-----------|-------------------|---------------------------------------------|
-| SM16380SH | `SM16380SH`       | Tested on a P2.5 128x64 1/32 scan panel (C7262FJ row driver) |
+| SM16380SH | `SM16380SH`       | Being tested on a P2.5 128x64 1/32 scan panel (C7262FJ row driver) |
 | ICND2055  | `ICND2055`        | Ported from DMD_STM32, untested             |
 | FM6373    | `FM6373`          | Ported from DMD_STM32, untested             |
 
