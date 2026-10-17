@@ -19,10 +19,9 @@ namespace pimoroni {
 // Maximum CLK frequency in MHz (most HUB75 panels handle about 20-25MHz)
 static const uint MAX_CLK_MHZ = 15;
 
-// Maximum CLK frequency of the frame upload in kHz. This is the frequency of the
-// free-running DCLK at 150MHz, so the chips' PWM clock doesn't change during the
-// upload. A P2.5 SM16380SH panel worked at 25MHz.
-static const uint MAX_UPLOAD_CLK_KHZ = 12500;
+// Maximum CLK frequency of the frame upload in kHz. A 128x64 frame takes ~2.6ms
+// at 25MHz, still slower than update() converts it on an RP2350 (~1.9ms).
+static const uint MAX_UPLOAD_CLK_KHZ = 25000;
 
 // Frame rate of the background refresh
 static const int64_t FRAME_US = 1000000 / 60;
@@ -211,7 +210,7 @@ void Hub75SPWM::start() {
     // Integer dividers keep the CLK below MAX_CLK_MHZ (frame/regs SMs: 6 cycles per clock, clk_lat: 2)
     uint data_clkdiv = 1 + cycles_per_us / (MAX_CLK_MHZ * 5);
     if(upload_clock_div == 0) {
-        // Smallest integer divider, 6 cycles per clock: 2 (12.5MHz) at 150MHz, 2 (10.4MHz) at 125MHz
+        // Smallest integer divider, 6 cycles per clock: 1 (25MHz) at 150MHz
         uint upload_clk_khz = clock_get_hz(clk_sys) / 6000;
         upload_clock_div = (upload_clk_khz + MAX_UPLOAD_CLK_KHZ - 1) / MAX_UPLOAD_CLK_KHZ;
     }
@@ -469,12 +468,17 @@ int64_t Hub75SPWM::start_frame() {
     pio_sm_exec(pio, sm_frame, pio_encode_out(pio_null, 32));      // Empty OSR so the data is autopulled
     pio_sm_set_enabled(pio, sm_frame, true);
 
-    frame_number = frame_number + 1;
-    state = State::UPLOADING;
     dma_channel_acknowledge_irq1(dma_channel); // Clear completions of the register writes
     dma_channel_set_irq1_enabled(dma_channel, true);
     upload_start_us = time_us_32();
     start_dma(sm_frame, frame_buffer, buffer_size(), 0);
+
+    // In this order, so update() on the other core can rely on upload_line()
+    // once it sees UPLOADING or a new frame_number
+    __dmb();
+    state = State::UPLOADING;
+    __dmb();
+    frame_number = frame_number + 1;
     frame_start_us = absolute_time_diff_us(start, get_absolute_time());
 
     // Negative: relative to when this alarm was due, so the frame rate doesn't drift
@@ -546,13 +550,15 @@ void Hub75SPWM::update(PicoGraphics *graphics) {
     // - If an upload is running, only convert lines it has already read, so that
     //   frame is entirely old. Converting is faster than uploading, so this
     //   finishes just after the upload.
-    // - Otherwise convert straight away. If an upload starts meanwhile, it can't
-    //   catch up with the conversion, so that frame is entirely new.
+    // - Otherwise convert straight away. If an upload starts meanwhile, it
+    //   shouldn't catch up with the conversion, so that frame is entirely new.
+    //   If it does, the frame is counted in torn_frames.
     // The interrupts can run on the other core, only state, frame_number and
     // the DMA position are shared.
     const uint32_t *src = (const uint32_t *)graphics->frame_buffer;
     bool behind = avoid_tearing && state == State::UPLOADING;
     uint32_t frame = frame_number;
+    bool torn = false;
 
     for(auto line = 0u; line < scan_rows; line++) {
         if(behind && frame_number == frame && upload_line() <= line) {
@@ -567,6 +573,12 @@ void Hub75SPWM::update(PicoGraphics *graphics) {
             hub75_spwm_pack::set_pair(frame_buffer, x, line, width, scan_rows,
                 lut[(c0 >> 16) & 0xff], lut[(c0 >> 8) & 0xff], lut[c0 & 0xff],
                 lut[(c1 >> 16) & 0xff], lut[(c1 >> 8) & 0xff], lut[c1 & 0xff]);
+        }
+        // An upload that started meanwhile has read (part of) this line before
+        // it was written. Conservative: it may have read the line just after.
+        if(!torn && frame_number != frame && upload_line() > line) {
+            torn = true;
+            torn_frames = torn_frames + 1;
         }
     }
     update_wait_us = wait;

@@ -88,8 +88,8 @@ const uint16_t RP2040_DEFAULT[] = {
 const uint PROFILE_COUNT = count_of(SM16380SH_PROFILES) + 1;
 
 // Frame upload clock dividers to try. A data clock takes 6 PIO cycles, so at
-// 150MHz: 3 = 8.3MHz, 2.5 = 10MHz, 2 = 12.5MHz (default), 1.5 = 16.7MHz,
-// 1.25 = 20MHz, 1 = 25MHz. Fractional dividers jitter by one system clock.
+// 150MHz: 3 = 8.3MHz, 2.5 = 10MHz, 2 = 12.5MHz, 1.5 = 16.7MHz,
+// 1.25 = 20MHz, 1 = 25MHz (default). Fractional dividers jitter by one system clock.
 const float UPLOAD_CLOCK_DIVS[] = {3.0f, 2.5f, 2.0f, 1.5f, 1.25f, 1.0f};
 
 void draw_orientation() {
@@ -251,8 +251,8 @@ int main() {
     hub75.update(&graphics);
     int64_t update_us = absolute_time_diff_us(start, get_absolute_time());
     if(++frame % 60 == 0) {
-      printf("upload %luus, update %lldus (waiting %luus, converting %luus), frame start %luus\n", // once per second
-        hub75.upload_us, update_us, hub75.update_wait_us, hub75.update_convert_us, hub75.frame_start_us);
+      printf("upload %luus, update %lldus (waiting %luus, converting %luus), frame start %luus, torn %lu\n", // once per second
+        hub75.upload_us, update_us, hub75.update_wait_us, hub75.update_convert_us, hub75.frame_start_us, hub75.torn_frames);
     }
 
     // Draw at 60Hz, the same rate as the refresh
