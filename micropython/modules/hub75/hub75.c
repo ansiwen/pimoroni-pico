@@ -54,6 +54,7 @@ MP_DEFINE_CONST_FUN_OBJ_2(Hub75SPWM_set_brightness_obj, Hub75SPWM_set_brightness
 MP_DEFINE_CONST_FUN_OBJ_2(Hub75SPWM_set_colour_depth_obj, Hub75SPWM_set_colour_depth);
 MP_DEFINE_CONST_FUN_OBJ_2(Hub75SPWM_set_avoid_tearing_obj, Hub75SPWM_set_avoid_tearing);
 MP_DEFINE_CONST_FUN_OBJ_2(Hub75SPWM_set_upload_clock_div_obj, Hub75SPWM_set_upload_clock_div);
+MP_DEFINE_CONST_FUN_OBJ_2(Hub75SPWM_set_dclk_clock_div_obj, Hub75SPWM_set_dclk_clock_div);
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(Hub75SPWM_set_config_registers_obj, 2, 4, Hub75SPWM_set_config_registers);
 MP_DEFINE_CONST_FUN_OBJ_1(Hub75SPWM_load_chip_defaults_obj, Hub75SPWM_load_chip_defaults);
 MP_DEFINE_CONST_FUN_OBJ_1(Hub75SPWM_stats_obj, Hub75SPWM_stats);
@@ -70,6 +71,7 @@ static const mp_rom_map_elem_t Hub75SPWM_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_set_colour_depth), MP_ROM_PTR(&Hub75SPWM_set_colour_depth_obj) },
     { MP_ROM_QSTR(MP_QSTR_set_avoid_tearing), MP_ROM_PTR(&Hub75SPWM_set_avoid_tearing_obj) },
     { MP_ROM_QSTR(MP_QSTR_set_upload_clock_div), MP_ROM_PTR(&Hub75SPWM_set_upload_clock_div_obj) },
+    { MP_ROM_QSTR(MP_QSTR_set_dclk_clock_div), MP_ROM_PTR(&Hub75SPWM_set_dclk_clock_div_obj) },
     { MP_ROM_QSTR(MP_QSTR_set_config_registers), MP_ROM_PTR(&Hub75SPWM_set_config_registers_obj) },
     { MP_ROM_QSTR(MP_QSTR_load_chip_defaults), MP_ROM_PTR(&Hub75SPWM_load_chip_defaults_obj) },
     { MP_ROM_QSTR(MP_QSTR_stats), MP_ROM_PTR(&Hub75SPWM_stats_obj) },

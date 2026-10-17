@@ -231,8 +231,10 @@ void Hub75SPWM::start() {
     }
     frame_config = hub75_spwm_frame_program_init(pio, sm_frame, frame_prog_offs, data_clkdiv, pin_r0, pin_clk);
     regs_config = hub75_spwm_regs_program_init(pio, sm_regs, regs_prog_offs, data_clkdiv, pin_r0, pin_lat, pin_clk);
+    uint clk_lat_clkdiv = 1 + cycles_per_us / (MAX_CLK_MHZ * 2);
     clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs,
-        1 + cycles_per_us / (MAX_CLK_MHZ * 2), pin_lat, pin_clk);
+        clk_lat_clkdiv, pin_lat, pin_clk);
+    if(dclk_clock_div == 0) set_dclk_clock_div(clk_lat_clkdiv);
     clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio_gclk, sm_clk_cnt, clk_cnt_prog_offs,
         1, pin_clk, pin_oe);
     rows_config = hub75_spwm_rows_program_init(pio_gclk, sm_rows, rows_prog_offs, pin_row_a);
@@ -518,9 +520,19 @@ void __not_in_flash_func(Hub75SPWM::finish_frame)() {
     state = State::IDLE;
 }
 
+void Hub75SPWM::set_dclk_clock_div(float div) {
+    uint32_t div_int;
+    uint8_t div_frac8;
+    pio_calculate_clkdiv8_from_float(div, &div_int, &div_frac8);
+    // One register value, so the DMA IRQ never sees half of a change
+    dclk_clkdiv_reg = (div_int << PIO_SM0_CLKDIV_INT_LSB) | ((uint32_t)div_frac8 << PIO_SM0_CLKDIV_FRAC_LSB);
+    dclk_clock_div = div;
+}
+
 // Free-running CLK is the reference clock (DCLK) for the chips' PWM
 void __not_in_flash_func(Hub75SPWM::start_dclk)() {
     pio_sm_init(pio, sm_clk_lat, clk_lat_prog_offs + hub75_spwm_clk_lat_offset_free_run, &clk_lat_config);
+    pio->sm[sm_clk_lat].clkdiv = dclk_clkdiv_reg;
     pio_sm_set_enabled(pio, sm_clk_lat, true);
 }
 

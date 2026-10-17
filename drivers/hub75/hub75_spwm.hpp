@@ -128,6 +128,13 @@ class Hub75SPWM {
     void set_upload_clock_div(float div) { upload_clock_div = div; }
     float get_upload_clock_div() const { return upload_clock_div; }
 
+    // For testing: set the PIO clock divider of the free-running DCLK between
+    // uploads, applied from the end of the next upload. One clock takes 2 PIO
+    // cycles, the default is 6 at 150MHz (12.5MHz), 3 gives 25MHz. Commands
+    // (VSYNC, latches, registers) keep the default speed.
+    void set_dclk_clock_div(float div);
+    float get_dclk_clock_div() const { return dclk_clock_div; }
+
     // For testing: CPU time of the last background frame start, duration of the
     // last frame upload, and how long the last update() spent waiting for the
     // upload and converting, in microseconds
@@ -191,6 +198,8 @@ class Hub75SPWM {
     volatile uint32_t frame_us = 1000000 / 60;
     uint32_t sync_frame = 0;   // frame_number of the last update() with sync
     volatile float upload_clock_div = 0;    // 0 until start()
+    volatile float dclk_clock_div = 0;      // 0 until start()
+    volatile uint32_t dclk_clkdiv_reg = 0;  // dclk_clock_div as written to the SM's CLKDIV register
     uint32_t upload_start_us = 0;
     alarm_id_t frame_alarm = 0;
 

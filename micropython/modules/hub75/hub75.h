@@ -39,6 +39,7 @@ extern mp_obj_t Hub75SPWM_set_brightness(mp_obj_t self_in, mp_obj_t brightness_i
 extern mp_obj_t Hub75SPWM_set_colour_depth(mp_obj_t self_in, mp_obj_t bits_in);
 extern mp_obj_t Hub75SPWM_set_avoid_tearing(mp_obj_t self_in, mp_obj_t avoid_in);
 extern mp_obj_t Hub75SPWM_set_upload_clock_div(mp_obj_t self_in, mp_obj_t div_in);
+extern mp_obj_t Hub75SPWM_set_dclk_clock_div(mp_obj_t self_in, mp_obj_t div_in);
 extern mp_obj_t Hub75SPWM_set_config_registers(size_t n_args, const mp_obj_t *args);
 extern mp_obj_t Hub75SPWM_load_chip_defaults(mp_obj_t self_in);
 extern mp_obj_t Hub75SPWM_stats(mp_obj_t self_in);
