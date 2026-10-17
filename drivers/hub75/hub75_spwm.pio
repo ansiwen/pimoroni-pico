@@ -7,37 +7,84 @@
 ; SPDX-License-Identifier: GPL-3.0-or-later
 ;
 
-.program hub75_spwm_data
+.program hub75_spwm_frame
+.side_set 2
+
+; side-set pins are CLK (bit 0) and LAT (bit 1)
+; OUT pins are R0, G0, B0, R1, G1, B1
+;
+; Clocks out a frame from the compact frame buffer. Every chip receives one
+; 16-bit word per channel, MSB first, of which only bits 13..4 (with
+; 14 greyscale bits) carry data. The buffer only holds those 10 clocks, as two
+; 32-bit words of 5 clocks * 6 bits (autopull at 30 bits). This program adds
+; the 2 leading and 4 trailing zero clocks, and raises LAT on the last clock of
+; the last chip in the chain (a data latch).
+;
+; ISR = number of chips in the chain - 1, loaded by the CPU with pio_sm_exec.
+; The number of leading and trailing zero clocks are patched by the CPU for
+; chips with a different number of greyscale bits (lead_count, trail_count).
+;
+; The clock waveform matches hub75_spwm_regs: RGB changes 3 cycles after the
+; falling edge, 1 cycle before the rising edge, CLK is high for 2 cycles.
+; Stalls in `out pins` with CLK low when the FIFO runs empty.
+
+.wrap_target
+    mov y, isr          side 0b00 [1]   ; Chips in the chain - 1
+word:
+public lead_count:
+    set x, 1            side 0b00       ; Leading zero clocks - 1 (RGB is already 0)
+lead:
+    nop                 side 0b01 [1]
+    jmp x-- lead        side 0b00 [2]
+    set x, 9            side 0b00       ; 10 data clocks
+data:
+    out pins, 6         side 0b00
+    nop                 side 0b01 [1]
+    jmp x-- data        side 0b00 [2]
+    mov pins, null      side 0b00
+public trail_count:
+    set x, 2            side 0b00       ; Trailing zero clocks - 2
+trail:
+    nop                 side 0b01 [1]
+    jmp x-- trail       side 0b00 [2]
+    jmp !y, last        side 0b00
+    nop                 side 0b01 [1]   ; Last trailing zero clock
+    jmp y-- word        side 0b00 [2]   ; Next chip (y is not 0 here)
+last:
+    nop                 side 0b10 [3]   ; Last chip: raise LAT
+    nop                 side 0b11 [1]   ; Last trailing zero clock with LAT
+    nop                 side 0b10 [2]   ; LAT goes low at the start of the next chain
+.wrap
+
+
+.program hub75_spwm_regs
 .side_set 1
 
 ; side-set pin is CLK
 ; OUT pins are R0, G0, B0, R1, G1, B1
 ; SET pin is LAT
 ;
-; The first FIFO word is a control word:
+; Sends register commands. The first FIFO word is a control word:
 ; - number of clocks - 1 (16 LSBs)
 ; - number of clocks - number of LAT clocks - 1 (16 MSBs)
-; followed by one FIFO word per clock with the 6 RGB bits in the LSBs.
+; followed by 4 clocks per FIFO word, one byte each (LSB first) with the 6 RGB
+; bits in its LSBs (autopull at 32 bits).
 ;
-; LAT is raised for the last N clocks of the transfer, which is how these chips
-; distinguish a data latch (1 clock) from a register write (5 clocks).
-; IRQ 7 is raised (not routed to the CPU) once the transfer is complete.
+; LAT is raised for the last N clocks, which is how these chips distinguish a
+; data latch (1 clock) from a register write (5 clocks) etc.
+; Stalls in `out x` when done, then the CPU returns RGB to 0.
 
 .wrap_target
-    pull block          side 0
-    out x, 16           side 0 ; Clock count
-    out y, 16           side 0 ; Clocks before LAT goes high
+    out x, 16           side 0          ; Clock count
+    out y, 16           side 0          ; Clocks before LAT goes high
 loop:
-    pull block          side 0
-    out pins, 6         side 0 ; Output R0, G0, B0, R1, G1, B1
-    out null, 26        side 1 [1] ; Rising edge on CLK
+    out pins, 6         side 0          ; Output R0, G0, B0, R1, G1, B1
+    out null, 2         side 1 [1]      ; Rising edge on CLK
     jmp y--, no_latch   side 0
-    set pins, 1         side 0 ; Assert LAT for the remaining clocks
+    set pins, 1         side 0          ; Assert LAT for the remaining clocks
 no_latch:
-    jmp x--, loop       side 0
+    jmp x--, loop       side 0 [1]
     set pins, 0         side 0
-    mov pins, null      side 0
-    irq nowait 7        side 0
 .wrap
 
 
@@ -113,7 +160,32 @@ output:
 .wrap
 
 % c-sdk {
-static inline pio_sm_config hub75_spwm_data_program_init(PIO pio, uint sm, uint offset, float clkdiv, uint rgb_base_pin, uint lat_pin, uint clk_pin) {
+static inline pio_sm_config hub75_spwm_frame_program_init(PIO pio, uint sm, uint offset, float clkdiv, uint rgb_base_pin, uint clk_pin) {
+    // CLK and LAT must be consecutive
+    pio_sm_set_consecutive_pindirs(pio, sm, rgb_base_pin, 6, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, clk_pin, 2, true);
+    for (uint i = rgb_base_pin; i < rgb_base_pin + 6; ++i)
+        pio_gpio_init(pio, i);
+    pio_gpio_init(pio, clk_pin);
+    pio_gpio_init(pio, clk_pin + 1);
+
+    pio_sm_config c = hub75_spwm_frame_program_get_default_config(offset);
+    sm_config_set_clkdiv(&c, clkdiv);
+    sm_config_set_out_pins(&c, rgb_base_pin, 6);
+    sm_config_set_sideset_pins(&c, clk_pin);
+    sm_config_set_out_shift(&c, true, true, 30);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    pio_sm_init(pio, sm, offset, &c);
+    return c;
+}
+
+// Set the number of leading and trailing zero clocks around the 10 data clocks
+static inline void hub75_spwm_frame_set_zeros(PIO pio, uint offset, uint lead, uint trail) {
+    pio->instr_mem[offset + hub75_spwm_frame_offset_lead_count] = pio_encode_set(pio_x, lead - 1);
+    pio->instr_mem[offset + hub75_spwm_frame_offset_trail_count] = pio_encode_set(pio_x, trail - 2);
+}
+
+static inline pio_sm_config hub75_spwm_regs_program_init(PIO pio, uint sm, uint offset, float clkdiv, uint rgb_base_pin, uint lat_pin, uint clk_pin) {
     pio_sm_set_consecutive_pindirs(pio, sm, rgb_base_pin, 6, true);
     pio_sm_set_consecutive_pindirs(pio, sm, lat_pin, 1, true);
     pio_sm_set_consecutive_pindirs(pio, sm, clk_pin, 1, true);
@@ -122,12 +194,12 @@ static inline pio_sm_config hub75_spwm_data_program_init(PIO pio, uint sm, uint 
     pio_gpio_init(pio, lat_pin);
     pio_gpio_init(pio, clk_pin);
 
-    pio_sm_config c = hub75_spwm_data_program_get_default_config(offset);
+    pio_sm_config c = hub75_spwm_regs_program_get_default_config(offset);
     sm_config_set_clkdiv(&c, clkdiv);
     sm_config_set_out_pins(&c, rgb_base_pin, 6);
     sm_config_set_set_pins(&c, lat_pin, 1);
     sm_config_set_sideset_pins(&c, clk_pin);
-    sm_config_set_out_shift(&c, true, false, 32);
+    sm_config_set_out_shift(&c, true, true, 32);
     pio_sm_init(pio, sm, offset, &c);
     return c;
 }

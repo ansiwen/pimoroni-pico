@@ -70,8 +70,9 @@ class Hub75SPWM {
     uint pin_oe = 13;
 
 
-    // width is the total length of the chain and must be a multiple of 16
-    Hub75SPWM(uint width, uint height, Chip chip = Chip::SM16380SH);
+    // width is the total length of the chain and must be a multiple of 16.
+    // `buffer` must hold buffer_size() words, or nullptr to allocate it.
+    Hub75SPWM(uint width, uint height, Chip chip = Chip::SM16380SH, uint32_t *buffer = nullptr);
     ~Hub75SPWM();
 
     // Replace the chip configuration registers, eg. with a profile from
@@ -84,6 +85,10 @@ class Hub75SPWM {
     // Restore the built-in configuration registers for the chip
     void load_chip_defaults();
 
+    // Size of the frame buffer in 32-bit words: width * height, the same RAM as Hub75
+    uint buffer_size() const { return width * height; }
+
+    // Brightness and colour depth are applied when a pixel is set
     void set_pixel(uint x, uint y, uint8_t r, uint8_t g, uint8_t b);
     void clear();
 
@@ -91,20 +96,21 @@ class Hub75SPWM {
     void start();
     void stop();
 
-    // Upload the back buffer to the panel. Blocks for the length of the transfer.
+    // Upload the frame buffer to the panel. Blocks for the length of the transfer.
     void refresh();
 
-    // Copy a PicoGraphics frame buffer to the back buffer and upload it to the panel.
-    // Skips the upload if neither the image, brightness nor colour_depth changed,
-    // since every upload briefly disturbs the panel's PWM, unless `force` is set.
+    // Convert a PicoGraphics frame buffer into the frame buffer and upload it to the panel.
+    // Skips the upload if the converted image didn't change (including brightness and
+    // colour_depth), since every upload briefly disturbs the panel's PWM, unless `force` is set.
     void update(PicoGraphics *graphics, bool force = false);
 
     private:
     static const uint MAX_CONFIG_REGISTERS = 40;
     static const uint CHANNELS_PER_CHIP = 16;
 
-    // Pairs of pixels (top half, bottom half) as 10-bit gamma corrected colour
-    Pixel *back_buffer = nullptr;
+    // Greyscale data as it is clocked out, see hub75_spwm_pack.hpp
+    uint32_t *frame_buffer = nullptr;
+    bool managed_buffer = false;
 
     // Bit position + 1 of the greyscale MSB in the chip's 16-bit word
     uint gclk_bits = 14;
@@ -116,34 +122,32 @@ class Hub75SPWM {
     // State machines
     PIO pio = nullptr;      // data, clk_lat
     PIO pio_gclk = nullptr; // clk_cnt, rows
-    uint sm_data = 0;
+    uint sm_frame = 0;
+    uint sm_regs = 0;
     uint sm_clk_lat = 0;
     uint sm_clk_cnt = 0;
     uint sm_rows = 0;
-    uint data_prog_offs = 0;
+    uint frame_prog_offs = 0;
+    uint regs_prog_offs = 0;
     uint clk_lat_prog_offs = 0;
     uint clk_cnt_prog_offs = 0;
     uint rows_prog_offs = 0;
-    pio_sm_config data_config;
+    pio_sm_config frame_config;
+    pio_sm_config regs_config;
     pio_sm_config clk_lat_config;
     pio_sm_config clk_cnt_config;
     pio_sm_config rows_config;
 
     int dma_channel = -1;
-    dma_channel_config dma_config;
-
-    // Two line buffers, one being sent by DMA while the other is filled
-    uint8_t *line_buffer[2] = {nullptr, nullptr};
 
     bool running = false;
 
-    // Set when the back buffer or display settings differ from the panel
+    // Set when the frame buffer differs from the panel
     bool dirty = true;
-    uint8_t uploaded_brightness = 0;
-    uint uploaded_colour_depth = 0;
     bool gclk_running = false;
 
     void send_all_config_registers();
+    uint32_t greyscale(uint8_t v);
 
     uint current_row();
 
@@ -153,16 +157,15 @@ class Hub75SPWM {
     void send_vsync();
     void send_register(uint16_t value, uint latches) { send_register(value, value, value, latches); }
     void send_register(uint16_t red, uint16_t green, uint16_t blue, uint latches);
-    void restart_data_sm(uint latches);
-    void wait_data_sm();
+    void start_dma(uint sm, const void *src, uint count, uint ring_bits);
+    void wait_dma(uint sm);
 
     void init_mux();
     void start_gclk();
     void stop_gclk();
     void start_dclk();
     void load_config_register();
-    void data_transfer();
-    void fill_line(uint8_t *buf, uint y, uint channel);
+    void frame_transfer();
 };
 
 }

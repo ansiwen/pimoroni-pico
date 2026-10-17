@@ -42,7 +42,9 @@ int main() {
 }
 ```
 
-The driver uses 4 state machines in two PIOs, and one DMA channel. It picks the PIOs at `start()`: one for the data and command programs (17 instructions) and another for clock counting and row switching (14 instructions). The row address is switched by PIO, so the display doesn't depend on interrupt latency. It needs `width * height * 4` bytes of RAM, 32KB for a 128x64 panel, plus the PicoGraphics frame buffer. The default pins match Interstate 75 and Interstate 75 W:
+The driver uses 5 state machines in two PIOs, and one DMA channel. It picks the PIOs at `start()`: one for the frame, register and command programs (3 state machines, 31 instructions) and another for clock counting and row switching (2 state machines, 14 instructions). The row address is switched by PIO, so the display doesn't depend on interrupt latency.
+
+The frame buffer needs `width * height * 4` bytes of RAM, 32KB for a 128x64 panel, the same as `Hub75`, plus the PicoGraphics frame buffer. You can pass your own buffer of `buffer_size()` words to the constructor. The buffer holds the greyscale data in the order it is sent to the panel, with only the 10 significant bits of each 16-bit word (see `hub75_spwm_pack.hpp`), so a frame is sent with a single DMA transfer. The PIO adds the constant zero bits and the data latches. The default pins match Interstate 75 and Interstate 75 W:
 - R0-B1: GPIO 0-5
 - A-E: GPIO 6-10
 - CLK: GPIO 11
@@ -65,7 +67,7 @@ See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern.
 
     You can call this before or after `start()`. If the clocks are running, all registers are sent immediately, which takes about half a second. Register `0x02` (scan lines) is always overwritten to match the panel height.
 3. If dark colours flicker or show noise, try a lower `hub75.colour_depth`. The default is 10 bits; DMD_STM32 uses 4.
-4. `hub75.brightness` (0-255) scales the greyscale values sent to the panel. It takes effect on the next `update()`.
+4. `hub75.brightness` (0-255) scales the greyscale values sent to the panel. Like `colour_depth`, it is applied when pixels are set, so it takes effect on the next `update()`.
 
 `update()` skips the upload when the image, `brightness` and `colour_depth` are unchanged, because each upload briefly disturbs the panel's PWM. `refresh()` always uploads.
 
