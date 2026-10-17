@@ -71,8 +71,19 @@ See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern.
 
 ## How it works
 
-`start()` begins refreshing the panel at a steady 60Hz in the background. A timer interrupt starts each frame: it waits for the start of the scan (row 0), sends VSYNC, the pre-active commands and one configuration register, then starts the DMA transfer of the frame buffer. A DMA interrupt restarts DCLK when the transfer is done. This takes about 0.5ms of CPU per frame, about 3%.
+`start()` begins refreshing the panel at a steady 60Hz in the background (see `set_refresh_rate()`). A timer interrupt starts each frame: it waits for the start of the scan (row 0), sends VSYNC, the pre-active commands and one configuration register, then starts the DMA transfer of the frame buffer. A DMA interrupt restarts DCLK when the transfer is done. This takes about 0.5ms of CPU per frame, about 3%.
 
 `update()` converts a PicoGraphics image into the frame buffer, scan line by scan line in upload order, so a frame never shows half of an update. If no upload is running, it converts straight away (~2ms for 128x64 on an RP2350), faster than an upload that starts meanwhile can read (`torn_frames` counts the times it wasn't). If an upload is running, it only converts lines that have already been sent, so it returns just after the upload ends (at most ~2.6ms). Set `hub75.avoid_tearing = false` to convert straight away in that case too, like `Hub75`: then the frame being sent can show the old image above a line and the new one below it. Frames are never delayed: irregular uploads make the whole picture flicker, so the frame is re-sent at a steady rate even when nothing changed. `update()` can be called from either core, eg. a display thread on core 1. Images that aren't `PEN_RGB888` are converted after the current upload, and a frame that starts meanwhile can show part of the update.
 
 The panel shows a frame at the VSYNC of the following frame, so an update appears 17-33ms after `update()` returns.
+
+If you draw at a lower frame rate than the refresh rate, each image is shown for a whole number of refreshes, eg. 2 or 3 at 25fps and 60Hz, which makes scrolling judder. To avoid that, set a refresh rate that is a multiple of your frame rate and let the driver time your frames: `update(&graphics, sync)` waits until `sync` frames have been sent since the last call, then converts the image in the gap before the next frame. For 25fps:
+
+```c++
+hub75.set_refresh_rate(50);
+hub75.start();
+while(true) {
+    // draw with graphics...
+    hub75.update(&graphics, 2);  // each image is shown for exactly 2 refreshes
+}
+```

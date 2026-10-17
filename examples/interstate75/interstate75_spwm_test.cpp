@@ -12,8 +12,8 @@
 Test pattern and tuning tool for HUB75 panels with S-PWM driver chips.
 
 Button A short press: next pattern
-Button A long press:  next frame upload clock speed (experiment, D = PIO clock
-                      divider, see UPLOAD_CLOCK_DIVS)
+Button A long press:  next timing mode (M), see TIMING_MODES: the panel refresh
+                      rate, and how the frames are timed
 Button B short press: next register profile (SM16380SH 1/32 scan)
 Button B long press:  toggle interrupt stress test (S1): a timer interrupt
                       blocks the CPU for 50us every 5ms
@@ -87,10 +87,23 @@ const uint16_t RP2040_DEFAULT[] = {
 
 const uint PROFILE_COUNT = count_of(SM16380SH_PROFILES) + 1;
 
-// Frame upload clock dividers to try. A data clock takes 6 PIO cycles, so at
-// 150MHz: 3 = 8.3MHz, 2.5 = 10MHz, 2 = 12.5MHz, 1.5 = 16.7MHz,
-// 1.25 = 20MHz, 1 = 25MHz (default). Fractional dividers jitter by one system clock.
-const float UPLOAD_CLOCK_DIVS[] = {3.0f, 2.5f, 2.0f, 1.5f, 1.25f, 1.0f};
+// Timing modes to compare. The scroller moves one pixel per drawn frame, so
+// uneven frame times show as judder.
+// - free: draw, wait for our own timer, update(), like a typical app loop
+// - sync: draw, update() with sync = refresh rate / frame rate, no own timer
+struct TimingMode {
+  uint refresh_hz;
+  uint fps;
+  bool sync;
+};
+const TimingMode TIMING_MODES[] = {
+  {60, 60, false},  // M0: as before
+  {60, 25, false},  // M1: 25fps at 60Hz, frames shown 2 or 3 refreshes
+  {50, 25, false},  // M2: 25fps at 50Hz, 2 refreshes if the timers stay in phase
+  {50, 25, true},   // M3: 25fps at 50Hz, synced to the refresh
+  {75, 25, false},  // M4: 25fps at 75Hz
+  {75, 25, true},   // M5: 25fps at 75Hz, synced to the refresh
+};
 
 void draw_orientation() {
   int w = graphics.bounds.w;
@@ -163,16 +176,11 @@ int main() {
 
   hub75.start();
 
-  // Start stepping the upload clock from the driver's default
-  uint clock_step = 0;
-  for(auto i = 0u; i < count_of(UPLOAD_CLOCK_DIVS); i++) {
-    if(UPLOAD_CLOCK_DIVS[i] == hub75.get_upload_clock_div()) clock_step = i;
-  }
-
   uint pattern = 0;
   uint profile = 2;
-  uint frame = 0;
+  uint mode = 0;
   absolute_time_t next_frame = get_absolute_time();
+  absolute_time_t next_print = get_absolute_time();
   repeating_timer_t stress_timer;
   bool stress = false;
   int offset = 0;
@@ -180,6 +188,7 @@ int main() {
 
   while(true) {
     uint32_t now = to_ms_since_boot(get_absolute_time());
+    const TimingMode &m = TIMING_MODES[mode];
     bool changed = false;
 
     switch(button_a.poll()) {
@@ -188,8 +197,8 @@ int main() {
         changed = true;
         break;
       case PressDetector::LONG:
-        clock_step = (clock_step + 1) % count_of(UPLOAD_CLOCK_DIVS);
-        hub75.set_upload_clock_div(UPLOAD_CLOCK_DIVS[clock_step]);
+        mode = (mode + 1) % count_of(TIMING_MODES);
+        hub75.set_refresh_rate(TIMING_MODES[mode].refresh_hz);
         changed = true;
         break;
       default:
@@ -216,10 +225,11 @@ int main() {
     }
 
     if(changed) {
+      const TimingMode &c = TIMING_MODES[mode];
       overlay_until = now + 2000;
-      float div = hub75.get_upload_clock_div();
-      printf("pattern %u, R%u (%s), upload clock div %.2f (%.1fMHz), stress %s\n",
-        pattern, profile, profile_name(profile), div, clock_get_hz(clk_sys) / 6e6f / div, stress ? "on" : "off");
+      printf("pattern %u, R%u (%s), M%u: %uHz refresh, %ufps %s, stress %s\n",
+        pattern, profile, profile_name(profile), mode, c.refresh_hz, c.fps, c.sync ? "synced" : "free",
+        stress ? "on" : "off");
     }
 
     graphics.set_pen(0, 0, 0);
@@ -239,7 +249,7 @@ int main() {
 
     if(now < overlay_until) {
       char label[32];
-      snprintf(label, sizeof(label), "R%u D%.2f S%u", profile, hub75.get_upload_clock_div(), stress ? 1 : 0);
+      snprintf(label, sizeof(label), "R%u M%u S%u", profile, mode, stress ? 1 : 0);
       graphics.set_pen(0, 0, 0);
       graphics.rectangle(Rect(0, 0, graphics.measure_text(label, 1) + 2, 9));
       graphics.set_pen(255, 255, 255);
@@ -247,19 +257,25 @@ int main() {
     }
 
     // The driver refreshes the panel in the background, update() only converts the image
-    absolute_time_t start = get_absolute_time();
-    hub75.update(&graphics);
+    absolute_time_t start;
+    if(m.sync) {
+      start = get_absolute_time();
+      hub75.update(&graphics, m.refresh_hz / m.fps);
+    } else {
+      next_frame = delayed_by_us(next_frame, 1000000 / m.fps);
+      if(absolute_time_diff_us(get_absolute_time(), next_frame) < 0) {
+        next_frame = get_absolute_time(); // Too slow, don't try to catch up
+      }
+      sleep_until(next_frame);
+      start = get_absolute_time();
+      hub75.update(&graphics);
+    }
     int64_t update_us = absolute_time_diff_us(start, get_absolute_time());
-    if(++frame % 60 == 0) {
-      printf("upload %luus, update %lldus (waiting %luus, converting %luus), frame start %luus, torn %lu\n", // once per second
+
+    if(absolute_time_diff_us(next_print, get_absolute_time()) >= 0) {
+      next_print = delayed_by_ms(next_print, 1000);
+      printf("upload %luus, update %lldus (waiting %luus, converting %luus), frame start %luus, torn %lu\n",
         hub75.upload_us, update_us, hub75.update_wait_us, hub75.update_convert_us, hub75.frame_start_us, hub75.torn_frames);
     }
-
-    // Draw at 60Hz, the same rate as the refresh
-    next_frame = delayed_by_us(next_frame, 1000000 / 60);
-    if(absolute_time_diff_us(get_absolute_time(), next_frame) < 0) {
-      next_frame = get_absolute_time(); // Too slow for 60Hz, don't try to catch up
-    }
-    sleep_until(next_frame);
   }
 }

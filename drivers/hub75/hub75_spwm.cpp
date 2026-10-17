@@ -23,8 +23,6 @@ static const uint MAX_CLK_MHZ = 15;
 // at 25MHz, still slower than update() converts it on an RP2350 (~1.9ms).
 static const uint MAX_UPLOAD_CLK_KHZ = 25000;
 
-// Frame rate of the background refresh
-static const int64_t FRAME_US = 1000000 / 60;
 
 // The driver that the DMA IRQ handler belongs to (only one instance is supported)
 static Hub75SPWM *instance = nullptr;
@@ -233,7 +231,7 @@ void Hub75SPWM::start() {
 
     running = true;
 
-    // Refresh the panel at FRAME_US intervals in the background
+    // Refresh the panel at frame_us intervals in the background
     frame_alarm = add_alarm_in_us(0, frame_alarm_callback, this, true);
 }
 
@@ -448,8 +446,8 @@ int64_t Hub75SPWM::frame_alarm_callback(alarm_id_t, void *user_data) {
 }
 
 int64_t Hub75SPWM::start_frame() {
-    // The previous upload hasn't finished (shouldn't happen at 60Hz)
-    if(state != State::IDLE) return -FRAME_US;
+    // The previous upload hasn't finished (shouldn't happen)
+    if(state != State::IDLE) return -(int64_t)frame_us;
 
     state = State::SYNCING;
     absolute_time_t start = get_absolute_time();
@@ -482,7 +480,7 @@ int64_t Hub75SPWM::start_frame() {
     frame_start_us = absolute_time_diff_us(start, get_absolute_time());
 
     // Negative: relative to when this alarm was due, so the frame rate doesn't drift
-    return -FRAME_US;
+    return -(int64_t)frame_us;
 }
 
 void __not_in_flash_func(Hub75SPWM::dma_irq_handler)() {
@@ -517,9 +515,23 @@ uint Hub75SPWM::upload_line() {
     return read / (sizeof(uint32_t) * 2 * width); // 2 words per column
 }
 
-void Hub75SPWM::update(PicoGraphics *graphics) {
+void Hub75SPWM::set_refresh_rate(uint hz) {
+    frame_us = 1000000 / hz;
+}
+
+void Hub75SPWM::update(PicoGraphics *graphics, uint sync) {
     absolute_time_t update_start = get_absolute_time();
     int64_t wait = 0;
+
+    // Wait until `sync` frames have been uploaded since the last synced update,
+    // then convert in the gap before the next frame, so the image is shown for
+    // exactly `sync` frames and can't tear. If we're late, sync to the next gap.
+    if(sync > 0 && running) {
+        uint32_t target = sync_frame + sync;
+        while((int32_t)(frame_number - target) < 0 || state != State::IDLE) tight_loop_contents();
+        sync_frame = frame_number;
+        wait = absolute_time_diff_us(update_start, get_absolute_time());
+    }
 
     // Gamma, colour depth and brightness for every 8-bit value
     uint16_t lut[256];
