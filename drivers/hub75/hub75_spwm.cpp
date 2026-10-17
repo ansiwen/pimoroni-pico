@@ -141,7 +141,7 @@ void Hub75SPWM::clear() {
     dirty = true;
 }
 
-void Hub75SPWM::set_row(uint r) {
+void __not_in_flash_func(Hub75SPWM::set_row)(uint r) {
     gpio_put_masked(0b11111 << pin_row_a, (r & 0b11111) << pin_row_a);
 }
 
@@ -179,6 +179,8 @@ void Hub75SPWM::start(irq_handler_t handler) {
     uint irq_num = pio_get_irq_num(pio, 0);
     pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
     irq_add_shared_handler(irq_num, handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
+    // Rows switch every ~10us, so this must preempt other handlers such as USB
+    irq_set_priority(irq_num, PICO_HIGHEST_IRQ_PRIORITY);
     irq_set_enabled(irq_num, true);
 
     running = true;
@@ -226,7 +228,9 @@ void Hub75SPWM::stop(irq_handler_t handler) {
     running = false;
 }
 
-void Hub75SPWM::pio_irq() {
+// Runs from RAM so it never waits for flash: a row IRQ that is handled late can
+// be lost, and then the row address lags the panel's row counter until the next frame.
+void __not_in_flash_func(Hub75SPWM::pio_irq)() {
     if(!pio_interrupt_get(pio, 0)) return;
     pio_interrupt_clear(pio, 0);
 

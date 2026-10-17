@@ -36,7 +36,7 @@ Hub75SPWM hub75(128, 64, Hub75SPWM::Chip::SM16380SH);
 
 PicoGraphics_PenRGB888 graphics(hub75.width, hub75.height, nullptr);
 
-void __isr pio_irq() {
+void __isr __not_in_flash_func(pio_irq)() {
   hub75.pio_irq();
 }
 
