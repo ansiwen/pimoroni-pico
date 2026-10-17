@@ -23,20 +23,26 @@
 ; from a register write (5 clocks) etc. Stalls with CLK low when the FIFO
 ; runs empty, LAT keeps its last level.
 ;
-; Each clock takes 8 cycles (2 high, 6 low), the same as the free running
-; DCLK in hub75_spwm_clk_lat, so the rows keep advancing at the same rate
-; while a frame is uploaded.
+; Each clock takes 16 cycles, the same as the free running DCLK in
+; hub75_spwm_clk_lat, so the rows keep advancing at the same rate while a
+; frame is uploaded. At 6.67ns per cycle (150MHz):
+; - cycle 0: CLK falls
+; - cycle 3: LAT changes (47ns setup)
+; - cycle 5: RGB changes (33ns after the falling edge, 33ns setup)
+; - cycle 10-15: CLK high (40ns)
+; The panel's 74HC buffers distort shorter pulses.
 
 .wrap_target
-    out pins, 6         side 0
-    out x, 2            side 0
-    jmp !x, lat_low     side 0
-    set pins, 1         side 0 [1]
-    jmp clock           side 0
+    out x, 6            side 0      ; RGB bits
+    out y, 2            side 0      ; LAT bit
+    jmp !y, lat_low     side 0
+    set pins, 1         side 0
+    jmp data            side 0
 lat_low:
-    set pins, 0         side 0 [2]
-clock:
-    nop                 side 1 [1] ; Rising edge on CLK
+    set pins, 0         side 0 [1]
+data:
+    mov pins, x         side 0 [4]
+    nop                 side 1 [5]  ; Rising edge on CLK
 .wrap
 
 
@@ -52,15 +58,18 @@ clock:
 ;
 ; Jumping to `free_run` generates a continuous CLK (DCLK), which the chips use
 ; as the reference clock for their internal PWM.
+;
+; Same timing as hub75_spwm_data: LAT/OE change 20ns after the falling edge
+; with 47ns setup, CLK is high for 40ns.
 
 .wrap_target
-    pull block          side 0
-    out pins, 2         side 0
-    out null, 30        side 1 [1]
+    pull block          side 0 [2]
+    out pins, 2         side 0 [6]
+    out null, 30        side 1 [5]
 .wrap
 public free_run:
-    nop                 side 0 [5]
-    jmp free_run        side 1 [1] ; Same timing as hub75_spwm_data
+    nop                 side 0 [9]
+    jmp free_run        side 1 [5] ; 16 cycles, as hub75_spwm_data
 
 
 .program hub75_spwm_clk_cnt

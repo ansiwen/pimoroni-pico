@@ -14,11 +14,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 namespace pimoroni {
 
-// Maximum CLK frequency in MHz (most HUB75 panels handle about 20-25MHz)
-static const uint MAX_CLK_MHZ = 12;
-
-// PIO cycles per CLK pulse, for both the data and the free running DCLK programs
-static const uint CYCLES_PER_CLK = 8;
+// The data and DCLK programs are timed for 150MHz PIO cycles (6.67ns),
+// 16 cycles per CLK pulse = 9.4MHz
+static const float PIO_CYCLE_HZ = 150000000.0f;
 
 // Clocks per scan line: OE (GCLK) off, OE on, OE off
 static const uint GCLK_D1 = 28;
@@ -169,8 +167,7 @@ void Hub75SPWM::start(irq_handler_t handler) {
 
     // The data and DCLK programs share a divider so the CLK rate is identical,
     // the clk_cnt SM runs at full speed so it doesn't miss any edges.
-    uint cycles_per_us = clock_get_hz(clk_sys) / 1000000;
-    uint clkdiv = (cycles_per_us + CYCLES_PER_CLK * MAX_CLK_MHZ - 1) / (CYCLES_PER_CLK * MAX_CLK_MHZ);
+    float clkdiv = std::max(1.0f, clock_get_hz(clk_sys) / PIO_CYCLE_HZ);
 
     data_config = hub75_spwm_data_program_init(pio, sm_data, data_prog_offs, clkdiv, pin_r0, pin_lat, pin_clk);
     clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs, clkdiv, pin_lat, pin_clk);
