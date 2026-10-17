@@ -22,13 +22,14 @@ static const uint GCLK_D1 = 28;
 static const uint GCLK_D2 = 4;
 static const uint GCLK_D3 = 96;
 
-// DMD_STM32 register_test profile "regtype1: built-in main SM16380SH register config"
+// DMD_STM32 register_test profile "regtype2: preserved former built-in SM16380SH CONFIG1".
+// The same as regtype1 (the current DMD_STM32 default) except register 0x07, which is brighter.
 static const uint16_t SM16380SH_CONFIG[3][32] = {
-    {0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x078c, 0x0800, 0x0900, 0x0a02, 0x0b0c, 0x0c08, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100,
+    {0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x072c, 0x0800, 0x0900, 0x0a02, 0x0b0c, 0x0c08, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100,
      0x1200, 0x1308, 0x1414, 0x1500, 0x1630, 0x1700, 0x1801, 0x1904, 0x1a03, 0x1b14, 0x1c12, 0x1d00, 0x1e00, 0x1f0c, 0x2000, 0x2200},
-    {0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x078c, 0x0800, 0x0900, 0x0a02, 0x0b0c, 0x0c18, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100,
+    {0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x072c, 0x0800, 0x0900, 0x0a02, 0x0b0c, 0x0c18, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100,
      0x1200, 0x1308, 0x1422, 0x1500, 0x1630, 0x1700, 0x1801, 0x1903, 0x1a01, 0x1b14, 0x1c8f, 0x1d00, 0x1e00, 0x1f0c, 0x2000, 0x2200},
-    {0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x078c, 0x0800, 0x0900, 0x0a02, 0x0b0c, 0x0c30, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100,
+    {0x021f, 0x0300, 0x0400, 0x0500, 0x0600, 0x072c, 0x0800, 0x0900, 0x0a02, 0x0b0c, 0x0c30, 0x0d00, 0x0e05, 0x0f00, 0x1000, 0x1100,
      0x1200, 0x1308, 0x1432, 0x1500, 0x1630, 0x1700, 0x1801, 0x1903, 0x1a01, 0x1b14, 0x1c8f, 0x1d00, 0x1e00, 0x1f0c, 0x2000, 0x2200}
 };
 
@@ -157,11 +158,14 @@ void Hub75SPWM::start(irq_handler_t handler) {
     clk_lat_prog_offs = pio_add_program(pio, &hub75_spwm_clk_lat_program);
     clk_cnt_prog_offs = pio_add_program(pio, &hub75_spwm_clk_cnt_program);
 
-    // Integer dividers keep the CLK below MAX_CLK_MHZ (data SM: 6 cycles per clock, clk_lat: 2)
+    // Integer dividers keep the CLK below MAX_CLK_MHZ (data SM: 6 cycles per clock, clk_lat: 2).
+    // clk_lat runs at half the speed so free_run_matched has the same timing as
+    // the data SM (3 and 6 at 150MHz).
+    uint data_clkdiv = 1 + cycles_per_us / (MAX_CLK_MHZ * 5);
     data_config = hub75_spwm_data_program_init(pio, sm_data, data_prog_offs,
-        1 + cycles_per_us / (MAX_CLK_MHZ * 5), pin_r0, pin_lat, pin_clk);
+        data_clkdiv, pin_r0, pin_lat, pin_clk);
     clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs,
-        1 + cycles_per_us / (MAX_CLK_MHZ * 2), pin_lat, pin_clk);
+        data_clkdiv * 2, pin_lat, pin_clk);
     clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio, sm_clk_cnt, clk_cnt_prog_offs,
         1, pin_clk, pin_oe);
     pio_sm_set_enabled(pio, sm_clk_lat, true);
@@ -466,7 +470,8 @@ void Hub75SPWM::refresh() {
 
 // Free-running CLK is the reference clock (DCLK) for the chips' PWM
 void Hub75SPWM::start_dclk() {
-    pio_sm_init(pio, sm_clk_lat, clk_lat_prog_offs + hub75_spwm_clk_lat_offset_free_run, &clk_lat_config);
+    uint offset = dclk_matched ? hub75_spwm_clk_lat_offset_free_run_matched : hub75_spwm_clk_lat_offset_free_run;
+    pio_sm_init(pio, sm_clk_lat, clk_lat_prog_offs + offset, &clk_lat_config);
     pio_sm_set_enabled(pio, sm_clk_lat, true);
 }
 

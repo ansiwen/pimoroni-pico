@@ -11,7 +11,9 @@
 Test pattern and tuning tool for HUB75 panels with S-PWM driver chips.
 
 Button A short press: next pattern
-Button A long press:  toggle VSYNC after / before the frame data (V1 / V0)
+Button A long press:  next mode: V0 D0, V0 D1, V1 D0, V1 D1
+                      V1 = VSYNC after the frame data (vsync_after_data)
+                      D1 = DCLK matched to the data clock (dclk_matched)
 Button B short press: next register profile (SM16380SH 1/32 scan)
 Button B long press:  next brightness
 
@@ -133,7 +135,7 @@ void draw_scroller(int offset) {
 }
 
 // Profile 0 is the DMD_STM32 RP2040 default, 1.. are SM16380SH_PROFILES.
-// Profile 1 is the same as the driver's built-in default.
+// Profile 2 is the same as the driver's built-in default.
 void apply_profile(uint profile) {
   if(profile == 0) {
     hub75.set_config_registers(RP2040_DEFAULT, count_of(RP2040_DEFAULT));
@@ -155,7 +157,8 @@ int main() {
   hub75.start(pio_irq);
 
   uint pattern = 0;
-  uint profile = 1;
+  uint profile = 2;
+  uint mode = 0;
   uint brightness = 0;
   int offset = 0;
   uint32_t overlay_until = to_ms_since_boot(get_absolute_time()) + 2000;
@@ -170,7 +173,9 @@ int main() {
         changed = true;
         break;
       case PressDetector::LONG:
-        hub75.vsync_after_data = !hub75.vsync_after_data;
+        mode = (mode + 1) % 4;
+        hub75.dclk_matched = mode & 1;
+        hub75.vsync_after_data = mode & 2;
         changed = true;
         break;
       default:
@@ -194,8 +199,9 @@ int main() {
 
     if(changed) {
       overlay_until = now + 2000;
-      printf("pattern %u, R%u (%s), vsync %s data, brightness %u\n",
-        pattern, profile, profile_name(profile), hub75.vsync_after_data ? "after" : "before", hub75.brightness);
+      printf("pattern %u, R%u (%s), vsync %s data, DCLK %s, brightness %u\n",
+        pattern, profile, profile_name(profile), hub75.vsync_after_data ? "after" : "before",
+        hub75.dclk_matched ? "matched" : "12.5MHz", hub75.brightness);
     }
 
     graphics.set_pen(0, 0, 0);
@@ -215,7 +221,7 @@ int main() {
 
     if(now < overlay_until) {
       char label[32];
-      snprintf(label, sizeof(label), "R%u V%u B%u", profile, hub75.vsync_after_data ? 1 : 0, hub75.brightness);
+      snprintf(label, sizeof(label), "R%u V%u D%u B%u", profile, hub75.vsync_after_data ? 1 : 0, hub75.dclk_matched ? 1 : 0, hub75.brightness);
       graphics.set_pen(0, 0, 0);
       graphics.rectangle(Rect(0, 0, graphics.measure_text(label, 1) + 2, 9));
       graphics.set_pen(255, 255, 255);
