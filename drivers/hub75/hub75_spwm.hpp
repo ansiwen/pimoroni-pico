@@ -69,7 +69,6 @@ class Hub75SPWM {
     uint pin_lat = 12;    // LAT and OE must be consecutive
     uint pin_oe = 13;
 
-    PIO pio = pio0;
 
     // width is the total length of the chain and must be a multiple of 16
     Hub75SPWM(uint width, uint height, Chip chip = Chip::SM16380SH);
@@ -115,6 +114,8 @@ class Hub75SPWM {
     uint next_config_register = 0;
 
     // State machines
+    PIO pio = nullptr;      // data, clk_lat
+    PIO pio_gclk = nullptr; // clk_cnt, rows
     uint sm_data = 0;
     uint sm_clk_lat = 0;
     uint sm_clk_cnt = 0;
@@ -146,9 +147,9 @@ class Hub75SPWM {
 
     uint current_row();
 
-    void send_clocks(uint count, uint32_t lat_oe = 0);
-    void send_latches(uint count) { send_clocks(count, 0b01); }
-    void send_oe(uint count) { send_clocks(count, 0b10); }
+    void send_clocks(uint count, bool lat = false);
+    void send_latches(uint count) { send_clocks(count, true); }
+    void send_oe(uint count);
     void send_vsync();
     void send_register(uint16_t value, uint latches) { send_register(value, value, value, latches); }
     void send_register(uint16_t red, uint16_t green, uint16_t blue, uint latches);

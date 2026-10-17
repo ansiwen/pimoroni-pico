@@ -147,29 +147,73 @@ uint Hub75SPWM::current_row() {
     return (gpio_get_all() >> pin_row_a) & 0b11111;
 }
 
+// Find a PIO other than `exclude` with `sm_count` free state machines and room
+// for all of `programs`, then claim the state machines and load the programs.
+static bool claim_pio(PIO exclude, PIO &pio, uint *sms, uint sm_count,
+                      const pio_program_t *const *programs, uint *offsets, uint program_count) {
+    for(auto i = 0u; i < NUM_PIOS; i++) {
+        PIO p = pio_get_instance(i);
+        if(p == exclude) continue;
+
+        uint claimed = 0;
+        while(claimed < sm_count) {
+            int sm = pio_claim_unused_sm(p, false);
+            if(sm < 0) break;
+            sms[claimed++] = sm;
+        }
+
+        uint added = 0;
+        if(claimed == sm_count) {
+            while(added < program_count && pio_can_add_program(p, programs[added])) {
+                offsets[added] = pio_add_program(p, programs[added]);
+                added++;
+            }
+        }
+
+        if(claimed == sm_count && added == program_count) {
+            pio = p;
+            return true;
+        }
+
+        // Not enough room, undo and try the next PIO
+        while(added--) pio_remove_program(p, programs[added], offsets[added]);
+        while(claimed--) pio_sm_unclaim(p, sms[claimed]);
+    }
+    return false;
+}
+
 void Hub75SPWM::start() {
     if(running) return;
 
     uint cycles_per_us = clock_get_hz(clk_sys) / 1000000;
 
-    sm_data = pio_claim_unused_sm(pio, true);
-    sm_clk_lat = pio_claim_unused_sm(pio, true);
-    sm_clk_cnt = pio_claim_unused_sm(pio, true);
-    sm_rows = pio_claim_unused_sm(pio, true);
+    // The data and command programs fill most of a PIO, the clock counting and
+    // row switching programs go in another one. CLK can be read from any PIO.
+    uint sms[2], offsets[2];
+    const pio_program_t *data_programs[] = {&hub75_spwm_data_program, &hub75_spwm_clk_lat_program};
+    if(!claim_pio(nullptr, pio, sms, 2, data_programs, offsets, 2)) {
+        panic("Hub75SPWM: no PIO with 2 free state machines and %u free instructions",
+            hub75_spwm_data_program.length + hub75_spwm_clk_lat_program.length);
+    }
+    sm_data = sms[0]; sm_clk_lat = sms[1];
+    data_prog_offs = offsets[0]; clk_lat_prog_offs = offsets[1];
 
-    data_prog_offs = pio_add_program(pio, &hub75_spwm_data_program);
-    clk_lat_prog_offs = pio_add_program(pio, &hub75_spwm_clk_lat_program);
-    clk_cnt_prog_offs = pio_add_program(pio, &hub75_spwm_clk_cnt_program);
-    rows_prog_offs = pio_add_program(pio, &hub75_spwm_rows_program);
+    const pio_program_t *gclk_programs[] = {&hub75_spwm_clk_cnt_program, &hub75_spwm_rows_program};
+    if(!claim_pio(pio, pio_gclk, sms, 2, gclk_programs, offsets, 2)) {
+        panic("Hub75SPWM: no second PIO with 2 free state machines and %u free instructions",
+            hub75_spwm_clk_cnt_program.length + hub75_spwm_rows_program.length);
+    }
+    sm_clk_cnt = sms[0]; sm_rows = sms[1];
+    clk_cnt_prog_offs = offsets[0]; rows_prog_offs = offsets[1];
 
     // Integer dividers keep the CLK below MAX_CLK_MHZ (data SM: 6 cycles per clock, clk_lat: 2)
     data_config = hub75_spwm_data_program_init(pio, sm_data, data_prog_offs,
         1 + cycles_per_us / (MAX_CLK_MHZ * 5), pin_r0, pin_lat, pin_clk);
     clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs,
         1 + cycles_per_us / (MAX_CLK_MHZ * 2), pin_lat, pin_clk);
-    clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio, sm_clk_cnt, clk_cnt_prog_offs,
+    clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio_gclk, sm_clk_cnt, clk_cnt_prog_offs,
         1, pin_clk, pin_oe);
-    rows_config = hub75_spwm_rows_program_init(pio, sm_rows, rows_prog_offs, pin_row_a);
+    rows_config = hub75_spwm_rows_program_init(pio_gclk, sm_rows, rows_prog_offs, pin_row_a);
     pio_sm_set_enabled(pio, sm_clk_lat, true);
 
     dma_channel = dma_claim_unused_channel(true);
@@ -199,19 +243,19 @@ void Hub75SPWM::stop() {
 
     pio_sm_set_enabled(pio, sm_data, false);
     pio_sm_set_enabled(pio, sm_clk_lat, false);
-    pio_sm_set_enabled(pio, sm_clk_cnt, false);
-    pio_sm_set_enabled(pio, sm_rows, false);
-    pio_interrupt_clear(pio, 0);
+    pio_sm_set_enabled(pio_gclk, sm_clk_cnt, false);
+    pio_sm_set_enabled(pio_gclk, sm_rows, false);
+    pio_interrupt_clear(pio_gclk, 0);
 
     pio_remove_program(pio, &hub75_spwm_data_program, data_prog_offs);
     pio_remove_program(pio, &hub75_spwm_clk_lat_program, clk_lat_prog_offs);
-    pio_remove_program(pio, &hub75_spwm_clk_cnt_program, clk_cnt_prog_offs);
-    pio_remove_program(pio, &hub75_spwm_rows_program, rows_prog_offs);
+    pio_remove_program(pio_gclk, &hub75_spwm_clk_cnt_program, clk_cnt_prog_offs);
+    pio_remove_program(pio_gclk, &hub75_spwm_rows_program, rows_prog_offs);
 
     pio_sm_unclaim(pio, sm_data);
     pio_sm_unclaim(pio, sm_clk_lat);
-    pio_sm_unclaim(pio, sm_clk_cnt);
-    pio_sm_unclaim(pio, sm_rows);
+    pio_sm_unclaim(pio_gclk, sm_clk_cnt);
+    pio_sm_unclaim(pio_gclk, sm_rows);
 
     // Return the pins to a known state
     for(auto pin : {pin_r0, pin_r0 + 1, pin_r0 + 2, pin_r0 + 3, pin_r0 + 4, pin_r0 + 5, pin_clk, pin_lat, pin_oe,
@@ -224,15 +268,15 @@ void Hub75SPWM::stop() {
     running = false;
 }
 
-// Generate `count` CLK pulses with LAT (bit 0) and OE (bit 1) held at `lat_oe`
-void Hub75SPWM::send_clocks(uint count, uint32_t lat_oe) {
+// Generate `count` CLK pulses with LAT held at `lat`
+void Hub75SPWM::send_clocks(uint count, bool lat) {
     if(count == 0) return;
     for(auto i = 0u; i < count; i++) {
-        pio_sm_put_blocking(pio, sm_clk_lat, lat_oe);
+        pio_sm_put_blocking(pio, sm_clk_lat, lat);
     }
     hub75_spwm_wait_tx_stall(pio, sm_clk_lat);
-    if(lat_oe) {
-        // Return LAT and OE low
+    if(lat) {
+        // Return LAT low
         pio_sm_exec(pio, sm_clk_lat, pio_encode_mov(pio_pins, pio_null));
     }
 }
@@ -289,33 +333,41 @@ void Hub75SPWM::send_register(uint16_t red, uint16_t green, uint16_t blue, uint 
 
 // Select row 0 and restart the rows SM: it selects row 1 at the first IRQ 0 from
 // clk_cnt (when start_gclk() runs), then 2, 3, ... scan_rows - 1, 0, 1, ...
+// Hold OE (GCLK) high for `count` CLK pulses. OE belongs to the clk_cnt SM's PIO,
+// which is stopped while the commands are sent.
+void Hub75SPWM::send_oe(uint count) {
+    pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_mov_not(pio_pins, pio_null)); // OE high
+    send_clocks(count);
+    pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_mov(pio_pins, pio_null));     // OE low
+}
+
 void Hub75SPWM::init_mux() {
-    pio_sm_set_enabled(pio, sm_rows, false);
-    pio_sm_init(pio, sm_rows, rows_prog_offs, &rows_config);
-    pio_interrupt_clear(pio, 0);
-    pio_sm_put(pio, sm_rows, 31 - scan_rows);
-    pio_sm_exec(pio, sm_rows, pio_encode_pull(false, true));
-    pio_sm_exec(pio, sm_rows, pio_encode_mov(pio_y, pio_osr));    // Y = 31 - scan rows
-    pio_sm_exec(pio, sm_rows, pio_encode_set(pio_x, 31));         // X = 31 - row
-    pio_sm_exec(pio, sm_rows, pio_encode_mov_not(pio_pins, pio_x)); // Row 0
-    pio_sm_set_enabled(pio, sm_rows, true);
+    pio_sm_set_enabled(pio_gclk, sm_rows, false);
+    pio_sm_init(pio_gclk, sm_rows, rows_prog_offs, &rows_config);
+    pio_interrupt_clear(pio_gclk, 0);
+    pio_sm_put(pio_gclk, sm_rows, 31 - scan_rows);
+    pio_sm_exec(pio_gclk, sm_rows, pio_encode_pull(false, true));
+    pio_sm_exec(pio_gclk, sm_rows, pio_encode_mov(pio_y, pio_osr));    // Y = 31 - scan rows
+    pio_sm_exec(pio_gclk, sm_rows, pio_encode_set(pio_x, 31));         // X = 31 - row
+    pio_sm_exec(pio_gclk, sm_rows, pio_encode_mov_not(pio_pins, pio_x)); // Row 0
+    pio_sm_set_enabled(pio_gclk, sm_rows, true);
 
     send_oe(12);
     send_clocks(88);
 }
 
 void Hub75SPWM::start_gclk() {
-    pio_sm_init(pio, sm_clk_cnt, clk_cnt_prog_offs, &clk_cnt_config);
+    pio_sm_init(pio_gclk, sm_clk_cnt, clk_cnt_prog_offs, &clk_cnt_config);
 
     // Three segments of 9 bits: (clocks - 1) in the low 8 bits, OE level in the MSB
     uint32_t control = (GCLK_D3 - 1);
     control = (control << 9) | (1 << 8) | (GCLK_D2 - 1);
     control = (control << 9) | (GCLK_D1 - 1);
-    pio_sm_put(pio, sm_clk_cnt, control);
-    pio_sm_exec(pio, sm_clk_cnt, pio_encode_pull(false, true));
-    pio_sm_exec(pio, sm_clk_cnt, pio_encode_mov(pio_isr, pio_osr)); // Keep a copy
+    pio_sm_put(pio_gclk, sm_clk_cnt, control);
+    pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_pull(false, true));
+    pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_mov(pio_isr, pio_osr)); // Keep a copy
 
-    pio_sm_set_enabled(pio, sm_clk_cnt, true);
+    pio_sm_set_enabled(pio_gclk, sm_clk_cnt, true);
 
     gclk_running = true;
 }
@@ -330,13 +382,13 @@ void Hub75SPWM::stop_gclk() {
         absolute_time_t timeout = make_timeout_time_ms(100);
         while(current_row() == 0 && !time_reached(timeout)) {}
         while(current_row() != 0 && !time_reached(timeout)) {}
-        pio_sm_set_enabled(pio, sm_clk_cnt, false);
+        pio_sm_set_enabled(pio_gclk, sm_clk_cnt, false);
         pio_sm_set_enabled(pio, sm_clk_lat, false);
         restore_interrupts(status);
         gclk_running = false;
     }
 
-    pio_sm_set_enabled(pio, sm_clk_cnt, false);
+    pio_sm_set_enabled(pio_gclk, sm_clk_cnt, false);
 
     // Restart clk_lat at the top of the program, which leaves CLK low
     pio_sm_set_enabled(pio, sm_clk_lat, false);

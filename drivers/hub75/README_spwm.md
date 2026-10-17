@@ -42,7 +42,7 @@ int main() {
 }
 ```
 
-The driver uses 4 state machines and 31 instructions of `pio0`, and one DMA channel. The row address is switched by PIO, so the display doesn't depend on interrupt latency. It needs `width * height * 4` bytes of RAM, 32KB for a 128x64 panel, plus the PicoGraphics frame buffer. The default pins match Interstate 75 and Interstate 75 W:
+The driver uses 4 state machines in two PIOs, and one DMA channel. It picks the PIOs at `start()`: one for the data and command programs (17 instructions) and another for clock counting and row switching (14 instructions). The row address is switched by PIO, so the display doesn't depend on interrupt latency. It needs `width * height * 4` bytes of RAM, 32KB for a 128x64 panel, plus the PicoGraphics frame buffer. The default pins match Interstate 75 and Interstate 75 W:
 - R0-B1: GPIO 0-5
 - A-E: GPIO 6-10
 - CLK: GPIO 11

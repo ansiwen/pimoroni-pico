@@ -45,10 +45,10 @@ no_latch:
 .side_set 1
 
 ; side-set pin is CLK
-; OUT pins are LAT, OE (must be consecutive)
+; OUT pin is LAT
 ;
-; Each FIFO word produces a single CLK pulse with LAT and OE held at the level
-; given by the two LSBs. This is used to send the "N clocks with LAT high"
+; Each FIFO word produces a single CLK pulse with LAT held at the level given
+; by the LSB. This is used to send the "N clocks with LAT high"
 ; commands (VSYNC, pre-active, ...) that configure the driver chips.
 ;
 ; Jumping to `free_run` generates a continuous CLK (DCLK), which the chips use
@@ -56,8 +56,8 @@ no_latch:
 
 .wrap_target
     pull block          side 0
-    out pins, 2         side 0
-    out null, 30        side 1 [1]
+    out pins, 1         side 0
+    out null, 31        side 1 [1]
 .wrap
 public free_run:
     nop                 side 0
@@ -133,16 +133,14 @@ static inline pio_sm_config hub75_spwm_data_program_init(PIO pio, uint sm, uint 
 }
 
 static inline pio_sm_config hub75_spwm_clk_lat_program_init(PIO pio, uint sm, uint offset, float clkdiv, uint lat_pin, uint clk_pin) {
-    // LAT and OE are driven together, OE must be lat_pin + 1
-    pio_sm_set_consecutive_pindirs(pio, sm, lat_pin, 2, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, lat_pin, 1, true);
     pio_sm_set_consecutive_pindirs(pio, sm, clk_pin, 1, true);
     pio_gpio_init(pio, lat_pin);
-    pio_gpio_init(pio, lat_pin + 1);
     pio_gpio_init(pio, clk_pin);
 
     pio_sm_config c = hub75_spwm_clk_lat_program_get_default_config(offset);
     sm_config_set_clkdiv(&c, clkdiv);
-    sm_config_set_out_pins(&c, lat_pin, 2);
+    sm_config_set_out_pins(&c, lat_pin, 1);
     sm_config_set_sideset_pins(&c, clk_pin);
     sm_config_set_out_shift(&c, true, false, 32);
     pio_sm_init(pio, sm, offset, &c);
