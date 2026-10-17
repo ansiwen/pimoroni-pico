@@ -102,7 +102,9 @@ void Hub75SPWM::load_chip_defaults() {
             set_config_registers(ICND2055_CONFIG, count_of(ICND2055_CONFIG));
             break;
         case Chip::FM6373:
-            gclk_bits = 14;
+            // DMD_STM32 uses 14, but on a P2.5 128x64 FM6373D panel the
+            // brightest values all looked the same, as with the SM16380SH
+            gclk_bits = 13;
             set_config_registers(FM6373_CONFIG, count_of(FM6373_CONFIG));
             break;
     }

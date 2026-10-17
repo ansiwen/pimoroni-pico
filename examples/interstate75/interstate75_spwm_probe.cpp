@@ -43,7 +43,7 @@ Patterns:
 Button A short press: next pattern
 Button A long press:  next preset (lanes and row driver), see PRESETS
 Button B short press: patterns 2 and 3: next N, otherwise next profile
-Button B long press:  next register profile (FM6373, DMD_STM32's numbers)
+Button B long press:  previous register profile (FM6373, DMD_STM32's numbers)
 
 Everything can also be set over USB serial, send "h" for help. The settings
 are printed after every change.
@@ -110,7 +110,7 @@ const uint PROFILE_COUNT = count_of(FM6373_PROFILES);
 
 uint pattern = 0;
 uint probe = 0;     // N of patterns 2 and 3
-uint profile = 0;   // REG 2
+uint profile = 1;   // REG 6, without ghosting on a P2.5 128x64 1/64 panel
 uint preset = 0;
 uint8_t raw_level = 128;  // every LED at 255 draws a lot of current
 bool raw_dirty = true;
@@ -152,6 +152,10 @@ void print_help() {
     "  n N            N of patterns 2 (scan line) and 3 (chain position)\n"
     "  v N            level 0-255 of the raw patterns, default 128\n"
     "  P N            profile by index 0-%u, R N by DMD_STM32 number (REG N)\n"
+    "  c              show the registers sent, * where they differ from the profile\n"
+    "  w RR VV [r|g|b] set register RR to VV (hex), for one colour or all, eg. w 0f 11\n"
+    "  x N RR ...     copy registers RR (hex) from profile REG N, eg. x 2 0f 1d,\n"
+    "                 tail = the 11 words before the last one\n"
     "  l single|lr|halves     lanes\n"
     "  r shift|decoder        row driver\n"
     "  m CLK LAT DATA shift register pins, eg. m a b c, m a - c (no latch)\n"
@@ -164,9 +168,40 @@ void print_help() {
     PATTERN_COUNT - 1, PROFILE_COUNT - 1);
 }
 
+// The registers sent to the panel: a copy of the selected profile, which the
+// w and x commands change
+uint16_t work[3][47];
+uint work_count = 0;
+
+void apply_work() {
+  hub75.set_config_registers(work[0], work[1], work[2], work_count);
+}
+
 void apply_profile() {
   const FM6373Profile &p = FM6373_PROFILES[profile];
-  hub75.set_config_registers(p.regs[0], p.regs[1], p.regs[2], p.count);
+  memcpy(work, p.regs, sizeof(work));
+  work_count = p.count;
+  apply_work();
+}
+
+// Index of register `reg` in the working copy, or -1. Only for registers 0x00-0x22,
+// which every 47 word profile has at the same index.
+int work_index(uint reg) {
+  if(reg > 0x22) return -1;
+  for(auto i = 0u; i < work_count; i++) {
+    if((work[0][i] >> 8) == reg) return i;
+  }
+  return -1;
+}
+
+void print_work() {
+  const FM6373Profile &p = FM6373_PROFILES[profile];
+  printf("registers, %s, * = changed (red green blue):\n", p.name);
+  for(auto i = 0u; i < work_count; i++) {
+    bool changed = false;
+    for(auto c = 0u; c < 3; c++) changed |= work[c][i] != p.regs[c][i];
+    printf("%2u: %04x %04x %04x%s\n", i, work[0][i], work[1][i], work[2][i], changed ? " *" : "");
+  }
 }
 
 // DMD_STM32's CLKs per scan line with OE low, high, low: shift register row
@@ -184,7 +219,7 @@ void restart(Hub75SPWM::Lanes lanes, Hub75SPWM::RowDriver rows) {
   hub75.set_lanes(lanes);
   if(rows != hub75.row_driver) set_default_gclk(rows);
   hub75.row_driver = rows;
-  apply_profile();
+  apply_work();
   hub75.start();
   raw_dirty = true;
 }
@@ -297,6 +332,42 @@ void command(char *line) {
   long n = strtol(args, nullptr, 0);
   switch(line[0]) {
     case 'h': print_help(); return;
+    case 'c': print_work(); return;
+    case 'w': {
+      unsigned reg, value;
+      char colour[4] = {0};
+      int got = sscanf(args, "%x %x %3s", &reg, &value, colour);
+      int i = got >= 2 ? work_index(reg) : -1;
+      if(i < 0 || value > 0xff) { printf("w RR VV [r|g|b], RR 00-22 in hex\n"); return; }
+      for(auto c = 0u; c < 3; c++) {
+        if(got < 3 || colour[0] == "rgb"[c]) work[c][i] = reg << 8 | value;
+      }
+      apply_work();
+      print_work();
+      break;
+    }
+    case 'x': {
+      char *rest;
+      long number = strtol(args, &rest, 10);
+      const FM6373Profile *src = nullptr;
+      for(auto &q : FM6373_PROFILES) if(q.number == (unsigned)number) src = &q;
+      if(!src || src->count != work_count) { printf("x N RR ...: no profile REG %ld with %u words\n", number, work_count); return; }
+      char *tok = strtok(rest, " ");
+      if(!tok) { printf("x N RR ...: which registers?\n"); return; }
+      for(; tok; tok = strtok(nullptr, " ")) {
+        if(strcmp(tok, "tail") == 0) {
+          for(auto i = work_count - 12; i < work_count - 1; i++)
+            for(auto c = 0u; c < 3; c++) work[c][i] = src->regs[c][i];
+          continue;
+        }
+        int i = work_index(strtoul(tok, nullptr, 16));
+        if(i < 0) { printf("skipped %s: registers 00-22 or tail\n", tok); continue; }
+        for(auto c = 0u; c < 3; c++) work[c][i] = src->regs[c][i];
+      }
+      apply_work();
+      print_work();
+      break;
+    }
     case 's': break;
     case 'p': pattern = n % PATTERN_COUNT; probe = 0; break;
     case 'n': probe = n; break;
@@ -423,7 +494,7 @@ int main() {
         changed = true;
         break;
       case PressDetector::LONG:
-        profile = (profile + 1) % PROFILE_COUNT;
+        profile = (profile + PROFILE_COUNT - 1) % PROFILE_COUNT;
         apply_profile();
         changed = true;
         break;
