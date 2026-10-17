@@ -2,6 +2,7 @@
 #include <algorithm>
 
 #include "hardware/clocks.h"
+#include "hardware/sync.h"
 
 #include "hub75_spwm.hpp"
 
@@ -47,7 +48,7 @@ static const uint16_t FM6373_CONFIG[] = {
 
 Hub75SPWM::Hub75SPWM(uint width, uint height, Chip chip)
  : width(width), height(height), scan_rows(height / 2), chip(chip) {
-    // Row address lines are driven directly from the PIO IRQ handler
+    // Row address lines are driven by the rows SM once started, hold row 0 until then
     for(auto i = 0u; i < 5; i++) {
         gpio_init(pin_row_a + i);
         gpio_set_dir(pin_row_a + i, true);
@@ -141,22 +142,25 @@ void Hub75SPWM::clear() {
     dirty = true;
 }
 
-void __not_in_flash_func(Hub75SPWM::set_row)(uint r) {
-    gpio_put_masked(0b11111 << pin_row_a, (r & 0b11111) << pin_row_a);
+// The row currently selected on the A-E lines
+uint Hub75SPWM::current_row() {
+    return (gpio_get_all() >> pin_row_a) & 0b11111;
 }
 
-void Hub75SPWM::start(irq_handler_t handler) {
-    if(running || !handler) return;
+void Hub75SPWM::start() {
+    if(running) return;
 
     uint cycles_per_us = clock_get_hz(clk_sys) / 1000000;
 
     sm_data = pio_claim_unused_sm(pio, true);
     sm_clk_lat = pio_claim_unused_sm(pio, true);
     sm_clk_cnt = pio_claim_unused_sm(pio, true);
+    sm_rows = pio_claim_unused_sm(pio, true);
 
     data_prog_offs = pio_add_program(pio, &hub75_spwm_data_program);
     clk_lat_prog_offs = pio_add_program(pio, &hub75_spwm_clk_lat_program);
     clk_cnt_prog_offs = pio_add_program(pio, &hub75_spwm_clk_cnt_program);
+    rows_prog_offs = pio_add_program(pio, &hub75_spwm_rows_program);
 
     // Integer dividers keep the CLK below MAX_CLK_MHZ (data SM: 6 cycles per clock, clk_lat: 2)
     data_config = hub75_spwm_data_program_init(pio, sm_data, data_prog_offs,
@@ -165,6 +169,7 @@ void Hub75SPWM::start(irq_handler_t handler) {
         1 + cycles_per_us / (MAX_CLK_MHZ * 2), pin_lat, pin_clk);
     clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio, sm_clk_cnt, clk_cnt_prog_offs,
         1, pin_clk, pin_oe);
+    rows_config = hub75_spwm_rows_program_init(pio, sm_rows, rows_prog_offs, pin_row_a);
     pio_sm_set_enabled(pio, sm_clk_lat, true);
 
     dma_channel = dma_claim_unused_channel(true);
@@ -175,29 +180,16 @@ void Hub75SPWM::start(irq_handler_t handler) {
     channel_config_set_dreq(&dma_config, pio_get_dreq(pio, sm_data, true));
     dma_channel_configure(dma_channel, &dma_config, &pio->txf[sm_data], nullptr, width, false);
 
-    // PIO IRQ 0 (raised by the clk_cnt SM) switches rows
-    uint irq_num = pio_get_irq_num(pio, 0);
-    pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
-    irq_add_shared_handler(irq_num, handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
-    // Rows switch every ~10us, so this must preempt other handlers such as USB
-    irq_set_priority(irq_num, PICO_HIGHEST_IRQ_PRIORITY);
-    irq_set_enabled(irq_num, true);
-
     running = true;
 
     // Send every config register once, then start displaying
     send_all_config_registers();
 }
 
-void Hub75SPWM::stop(irq_handler_t handler) {
+void Hub75SPWM::stop() {
     if(!running) return;
 
     stop_gclk();
-
-    uint irq_num = pio_get_irq_num(pio, 0);
-    pio_set_irq0_source_enabled(pio, pis_interrupt0, false);
-    irq_remove_handler(irq_num, handler);
-    pio_interrupt_clear(pio, 0);
 
     if(dma_channel != -1) {
         dma_channel_abort(dma_channel);
@@ -208,45 +200,28 @@ void Hub75SPWM::stop(irq_handler_t handler) {
     pio_sm_set_enabled(pio, sm_data, false);
     pio_sm_set_enabled(pio, sm_clk_lat, false);
     pio_sm_set_enabled(pio, sm_clk_cnt, false);
+    pio_sm_set_enabled(pio, sm_rows, false);
+    pio_interrupt_clear(pio, 0);
 
     pio_remove_program(pio, &hub75_spwm_data_program, data_prog_offs);
     pio_remove_program(pio, &hub75_spwm_clk_lat_program, clk_lat_prog_offs);
     pio_remove_program(pio, &hub75_spwm_clk_cnt_program, clk_cnt_prog_offs);
+    pio_remove_program(pio, &hub75_spwm_rows_program, rows_prog_offs);
 
     pio_sm_unclaim(pio, sm_data);
     pio_sm_unclaim(pio, sm_clk_lat);
     pio_sm_unclaim(pio, sm_clk_cnt);
+    pio_sm_unclaim(pio, sm_rows);
 
     // Return the pins to a known state
-    for(auto pin : {pin_r0, pin_r0 + 1, pin_r0 + 2, pin_r0 + 3, pin_r0 + 4, pin_r0 + 5, pin_clk, pin_lat, pin_oe}) {
+    for(auto pin : {pin_r0, pin_r0 + 1, pin_r0 + 2, pin_r0 + 3, pin_r0 + 4, pin_r0 + 5, pin_clk, pin_lat, pin_oe,
+                    pin_row_a, pin_row_a + 1, pin_row_a + 2, pin_row_a + 3, pin_row_a + 4}) {
         gpio_init(pin);
         gpio_set_dir(pin, true);
         gpio_put(pin, 0);
     }
-    set_row(0);
 
     running = false;
-}
-
-// Runs from RAM so it never waits for flash: a row IRQ that is handled late can
-// be lost, and then the row address lags the panel's row counter until the next frame.
-void __not_in_flash_func(Hub75SPWM::pio_irq)() {
-    if(!pio_interrupt_get(pio, 0)) return;
-    pio_interrupt_clear(pio, 0);
-
-    set_row(row);
-
-    if(row == 0 && gclk_stop_requested) {
-        // Stop DCLK and GCLK at the start of the frame
-        pio_sm_set_enabled(pio, sm_clk_cnt, false);
-        pio_sm_set_enabled(pio, sm_clk_lat, false);
-        gclk_stop_requested = false;
-        gclk_running = false;
-        return;
-    }
-
-    uint next = row + 1;
-    row = next >= scan_rows ? 0 : next;
 }
 
 // Generate `count` CLK pulses with LAT (bit 0) and OE (bit 1) held at `lat_oe`
@@ -312,37 +287,52 @@ void Hub75SPWM::send_register(uint16_t red, uint16_t green, uint16_t blue, uint 
     dma_channel_set_config(dma_channel, &dma_config, false);
 }
 
+// Select row 0 and restart the rows SM: it selects row 1 at the first IRQ 0 from
+// clk_cnt (when start_gclk() runs), then 2, 3, ... scan_rows - 1, 0, 1, ...
 void Hub75SPWM::init_mux() {
-    set_row(0);
-    row = 1;
+    pio_sm_set_enabled(pio, sm_rows, false);
+    pio_sm_init(pio, sm_rows, rows_prog_offs, &rows_config);
+    pio_interrupt_clear(pio, 0);
+    pio_sm_put(pio, sm_rows, 31 - scan_rows);
+    pio_sm_exec(pio, sm_rows, pio_encode_pull(false, true));
+    pio_sm_exec(pio, sm_rows, pio_encode_mov(pio_y, pio_osr));    // Y = 31 - scan rows
+    pio_sm_exec(pio, sm_rows, pio_encode_set(pio_x, 31));         // X = 31 - row
+    pio_sm_exec(pio, sm_rows, pio_encode_mov_not(pio_pins, pio_x)); // Row 0
+    pio_sm_set_enabled(pio, sm_rows, true);
+
     send_oe(12);
     send_clocks(88);
 }
 
 void Hub75SPWM::start_gclk() {
     pio_sm_init(pio, sm_clk_cnt, clk_cnt_prog_offs, &clk_cnt_config);
-    pio_sm_set_enabled(pio, sm_clk_cnt, true);
 
     // Three segments of 9 bits: (clocks - 1) in the low 8 bits, OE level in the MSB
     uint32_t control = (GCLK_D3 - 1);
     control = (control << 9) | (1 << 8) | (GCLK_D2 - 1);
     control = (control << 9) | (GCLK_D1 - 1);
-    pio_sm_put_blocking(pio, sm_clk_cnt, control);
+    pio_sm_put(pio, sm_clk_cnt, control);
+    pio_sm_exec(pio, sm_clk_cnt, pio_encode_pull(false, true));
+    pio_sm_exec(pio, sm_clk_cnt, pio_encode_mov(pio_isr, pio_osr)); // Keep a copy
+
+    pio_sm_set_enabled(pio, sm_clk_cnt, true);
 
     gclk_running = true;
 }
 
 void Hub75SPWM::stop_gclk() {
     if(gclk_running) {
-        // Ask the IRQ handler to stop the clocks once it reaches row 0
-        gclk_stop_requested = true;
-
-        // A frame is at most 64 rows * 256 clocks, this should never time out
+        // Stop DCLK and GCLK as soon as the rows SM selects row 0, the start of
+        // the frame. Interrupts are disabled so nothing delays this, it takes
+        // at most one frame of scan lines (~330us for 32 rows).
+        // A frame is at most 64 rows * 256 clocks, this should never time out.
+        uint32_t status = save_and_disable_interrupts();
         absolute_time_t timeout = make_timeout_time_ms(100);
-        while(gclk_running && !time_reached(timeout)) {
-            tight_loop_contents();
-        }
-        gclk_stop_requested = false;
+        while(current_row() == 0 && !time_reached(timeout)) {}
+        while(current_row() != 0 && !time_reached(timeout)) {}
+        pio_sm_set_enabled(pio, sm_clk_cnt, false);
+        pio_sm_set_enabled(pio, sm_clk_lat, false);
+        restore_interrupts(status);
         gclk_running = false;
     }
 

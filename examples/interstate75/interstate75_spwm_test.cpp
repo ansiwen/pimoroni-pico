@@ -15,7 +15,8 @@ Button A long press:  next mode: C0 V0, C1 V0, C0 V1, C1 V1
                       C1 = upload every frame at a steady 60Hz, even if unchanged
                       V1 = VSYNC after the frame data (vsync_after_data)
 Button B short press: next register profile (SM16380SH 1/32 scan)
-Button B long press:  next brightness
+Button B long press:  toggle interrupt stress test (S1): a timer interrupt
+                      blocks the CPU for 50us every 5ms
 
 The current settings are shown in the top-left corner for two seconds after
 each change, and printed over USB serial.
@@ -35,10 +36,6 @@ using namespace pimoroni;
 Hub75SPWM hub75(128, 64, Hub75SPWM::Chip::SM16380SH);
 
 PicoGraphics_PenRGB888 graphics(hub75.width, hub75.height, nullptr);
-
-void __isr __not_in_flash_func(pio_irq)() {
-  hub75.pio_irq();
-}
 
 // Distinguishes short and long presses, reported on release / after the hold time
 class PressDetector {
@@ -74,7 +71,11 @@ class PressDetector {
 PressDetector button_a(Interstate75::A);
 PressDetector button_b(Interstate75::B);
 
-const uint8_t BRIGHTNESS_LEVELS[] = {255, 128, 64, 16};
+// Interrupt load for the stress test, much longer than a scan line (~10us)
+bool stress_callback(repeating_timer_t *) {
+  busy_wait_us(50);
+  return true;
+}
 
 // The driver's first SM16380SH default, from DMD_STM32's DMD_SPWM_Driver_RP.h
 const uint16_t RP2040_DEFAULT[] = {
@@ -154,7 +155,7 @@ int main() {
 
   graphics.set_font("bitmap8");
 
-  hub75.start(pio_irq);
+  hub75.start();
 
   uint pattern = 0;
   uint profile = 2;
@@ -162,7 +163,8 @@ int main() {
   bool continuous = false;
   uint frame = 0;
   absolute_time_t next_frame = get_absolute_time();
-  uint brightness = 0;
+  repeating_timer_t stress_timer;
+  bool stress = false;
   int offset = 0;
   uint32_t overlay_until = to_ms_since_boot(get_absolute_time()) + 2000;
 
@@ -192,8 +194,12 @@ int main() {
         changed = true;
         break;
       case PressDetector::LONG:
-        brightness = (brightness + 1) % count_of(BRIGHTNESS_LEVELS);
-        hub75.brightness = BRIGHTNESS_LEVELS[brightness];
+        stress = !stress;
+        if(stress) {
+          add_repeating_timer_us(5000, stress_callback, nullptr, &stress_timer);
+        } else {
+          cancel_repeating_timer(&stress_timer);
+        }
         changed = true;
         break;
       default:
@@ -202,9 +208,9 @@ int main() {
 
     if(changed) {
       overlay_until = now + 2000;
-      printf("pattern %u, R%u (%s), vsync %s data, %s, brightness %u\n",
+      printf("pattern %u, R%u (%s), vsync %s data, %s, stress %s\n",
         pattern, profile, profile_name(profile), hub75.vsync_after_data ? "after" : "before",
-        continuous ? "upload at 60Hz" : "upload on change", hub75.brightness);
+        continuous ? "upload at 60Hz" : "upload on change", stress ? "on" : "off");
     }
 
     graphics.set_pen(0, 0, 0);
@@ -224,7 +230,7 @@ int main() {
 
     if(now < overlay_until) {
       char label[32];
-      snprintf(label, sizeof(label), "R%u C%u V%u B%u", profile, continuous ? 1 : 0, hub75.vsync_after_data ? 1 : 0, hub75.brightness);
+      snprintf(label, sizeof(label), "R%u C%u V%u S%u", profile, continuous ? 1 : 0, hub75.vsync_after_data ? 1 : 0, stress ? 1 : 0);
       graphics.set_pen(0, 0, 0);
       graphics.rectangle(Rect(0, 0, graphics.measure_text(label, 1) + 2, 9));
       graphics.set_pen(255, 255, 255);

@@ -33,12 +33,8 @@ The row select lines A-E must drive a binary row decoder. Most modern row driver
 Hub75SPWM hub75(128, 64, Hub75SPWM::Chip::SM16380SH);
 PicoGraphics_PenRGB888 graphics(hub75.width, hub75.height, nullptr);
 
-void __isr pio_irq() {
-    hub75.pio_irq();
-}
-
 int main() {
-    hub75.start(pio_irq);
+    hub75.start();
     while(true) {
         // draw with graphics...
         hub75.update(&graphics);  // blocks while the frame is uploaded
@@ -46,7 +42,7 @@ int main() {
 }
 ```
 
-The driver uses 3 state machines and 28 instructions of `pio0`, and one DMA channel. It needs `width * height * 4` bytes of RAM, 32KB for a 128x64 panel, plus the PicoGraphics frame buffer. The default pins match Interstate 75 and Interstate 75 W:
+The driver uses 4 state machines and 31 instructions of `pio0`, and one DMA channel. The row address is switched by PIO, so the display doesn't depend on interrupt latency. It needs `width * height * 4` bytes of RAM, 32KB for a 128x64 panel, plus the PicoGraphics frame buffer. The default pins match Interstate 75 and Interstate 75 W:
 - R0-B1: GPIO 0-5
 - A-E: GPIO 6-10
 - CLK: GPIO 11

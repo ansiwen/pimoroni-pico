@@ -88,10 +88,9 @@ class Hub75SPWM {
     void set_pixel(uint x, uint y, uint8_t r, uint8_t g, uint8_t b);
     void clear();
 
-    // Start/stop the clocks. `handler` must be an __isr function that calls pio_irq()
-    void start(irq_handler_t handler);
-    void stop(irq_handler_t handler);
-    void pio_irq();
+    // Start/stop the clocks
+    void start();
+    void stop();
 
     // Upload the back buffer to the panel. Blocks for the length of the transfer.
     void refresh();
@@ -119,12 +118,15 @@ class Hub75SPWM {
     uint sm_data = 0;
     uint sm_clk_lat = 0;
     uint sm_clk_cnt = 0;
+    uint sm_rows = 0;
     uint data_prog_offs = 0;
     uint clk_lat_prog_offs = 0;
     uint clk_cnt_prog_offs = 0;
+    uint rows_prog_offs = 0;
     pio_sm_config data_config;
     pio_sm_config clk_lat_config;
     pio_sm_config clk_cnt_config;
+    pio_sm_config rows_config;
 
     int dma_channel = -1;
     dma_channel_config dma_config;
@@ -138,13 +140,11 @@ class Hub75SPWM {
     bool dirty = true;
     uint8_t uploaded_brightness = 0;
     uint uploaded_colour_depth = 0;
-    volatile bool gclk_running = false;
-    volatile bool gclk_stop_requested = false;
-    volatile uint row = 0;
+    bool gclk_running = false;
 
     void send_all_config_registers();
 
-    void set_row(uint r);
+    uint current_row();
 
     void send_clocks(uint count, uint32_t lat_oe = 0);
     void send_latches(uint count) { send_clocks(count, 0b01); }

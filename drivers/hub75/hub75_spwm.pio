@@ -70,16 +70,15 @@ public free_run:
 ; OUT pin is OE (used as GCLK)
 ;
 ; Counts CLK rising edges and drives OE through three segments per scan line.
-; The (single) FIFO word is a control word with three 9-bit fields:
+; ISR and OSR hold a control word with three 9-bit fields, loaded by the CPU
+; with `pull` and `mov isr, osr` before the SM is enabled:
 ; - number of CLKs - 1 (8 LSBs)
 ; - OE level (MSB)
-; At the start of each scan line, IRQ 0 is raised so the CPU can switch the row
-; address lines.
+; At the start of each scan line, IRQ 0 is raised so hub75_spwm_rows switches
+; the row address lines.
 
-    pull block
-    mov isr, osr        ; Keep a copy of the control word
 .wrap_target
-    irq nowait 0        ; Ask the CPU to select the next row
+    irq nowait 0        ; hub75_spwm_rows selects the next row
     set y, 2            ; Three segments
 segment:
     out x, 8
@@ -90,6 +89,27 @@ count:
     jmp x--, count
     jmp y--, segment
     mov osr, isr
+.wrap
+
+
+.program hub75_spwm_rows
+
+; OUT pins are row select A-E
+;
+; Selects the next row at the start of every scan line (IRQ 0 from
+; hub75_spwm_clk_cnt), so the row address always follows the chips' internal
+; row counter, however busy the CPU is.
+; X holds 31 - row, Y holds 31 - number of scan rows. Both are loaded by the
+; CPU with pio_sm_exec, which also outputs row 0, before the SM is enabled.
+
+.wrap_target
+    wait 1 irq 0
+    jmp x--, check      ; Next row
+check:
+    jmp x!=y, output
+    set x, 31           ; Past the last row, back to row 0
+output:
+    mov pins, ~x
 .wrap
 
 % c-sdk {
@@ -138,6 +158,17 @@ static inline pio_sm_config hub75_spwm_clk_cnt_program_init(PIO pio, uint sm, ui
     sm_config_set_in_pins(&c, clk_pin);
     sm_config_set_out_pins(&c, oe_pin, 1);
     sm_config_set_out_shift(&c, true, false, 32);
+    pio_sm_init(pio, sm, offset, &c);
+    return c;
+}
+
+static inline pio_sm_config hub75_spwm_rows_program_init(PIO pio, uint sm, uint offset, uint row_base_pin) {
+    pio_sm_set_consecutive_pindirs(pio, sm, row_base_pin, 5, true);
+    for (uint i = row_base_pin; i < row_base_pin + 5; ++i)
+        pio_gpio_init(pio, i);
+
+    pio_sm_config c = hub75_spwm_rows_program_get_default_config(offset);
+    sm_config_set_out_pins(&c, row_base_pin, 5);
     pio_sm_init(pio, sm, offset, &c);
     return c;
 }
