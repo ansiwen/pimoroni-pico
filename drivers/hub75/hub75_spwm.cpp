@@ -205,6 +205,7 @@ void Hub75SPWM::start() {
 
     // Integer dividers keep the CLK below MAX_CLK_MHZ (frame/regs SMs: 6 cycles per clock, clk_lat: 2)
     uint data_clkdiv = 1 + cycles_per_us / (MAX_CLK_MHZ * 5);
+    if(upload_clock_div == 0) upload_clock_div = data_clkdiv;
     frame_config = hub75_spwm_frame_program_init(pio, sm_frame, frame_prog_offs, data_clkdiv, pin_r0, pin_clk);
     regs_config = hub75_spwm_regs_program_init(pio, sm_regs, regs_prog_offs, data_clkdiv, pin_r0, pin_lat, pin_clk);
     clk_lat_config = hub75_spwm_clk_lat_program_init(pio, sm_clk_lat, clk_lat_prog_offs,
@@ -451,6 +452,7 @@ int64_t Hub75SPWM::start_frame() {
 
     // Upload the frame buffer, the DMA IRQ handler finishes the frame
     pio_sm_set_enabled(pio, sm_frame, false);
+    sm_config_set_clkdiv(&frame_config, upload_clock_div);
     pio_sm_init(pio, sm_frame, frame_prog_offs, &frame_config);
     pio_sm_put(pio, sm_frame, width / CHANNELS_PER_CHIP - 1);
     pio_sm_exec(pio, sm_frame, pio_encode_pull(false, true));
@@ -462,6 +464,7 @@ int64_t Hub75SPWM::start_frame() {
     state = State::UPLOADING;
     dma_channel_acknowledge_irq1(dma_channel); // Clear completions of the register writes
     dma_channel_set_irq1_enabled(dma_channel, true);
+    upload_start_us = time_us_32();
     start_dma(sm_frame, frame_buffer, buffer_size(), 0);
     frame_start_us = absolute_time_diff_us(start, get_absolute_time());
 
@@ -483,6 +486,7 @@ void __not_in_flash_func(Hub75SPWM::finish_frame)() {
     hub75_spwm_wait_tx_stall(pio, sm_frame);
     pio_sm_set_enabled(pio, sm_frame, false);
     start_dclk();
+    upload_us = time_us_32() - upload_start_us;
     state = State::IDLE;
 }
 

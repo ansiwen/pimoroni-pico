@@ -108,9 +108,17 @@ class Hub75SPWM {
     // one below it, like Hub75.
     bool avoid_tearing = true;
 
-    // For testing: CPU time of the last background frame start, and how long the
-    // last update() spent waiting for the upload and converting, in microseconds
+    // For testing: set the PIO clock divider of the frame upload, applied from the
+    // next frame. One data clock takes 6 PIO cycles, the default is the smallest
+    // integer divider that keeps it at or below 15MHz (3 at 150MHz, 8.3MHz).
+    void set_upload_clock_div(float div) { upload_clock_div = div; }
+    float get_upload_clock_div() const { return upload_clock_div; }
+
+    // For testing: CPU time of the last background frame start, duration of the
+    // last frame upload, and how long the last update() spent waiting for the
+    // upload and converting, in microseconds
     volatile uint32_t frame_start_us = 0;
+    volatile uint32_t upload_us = 0;
     uint32_t update_wait_us = 0;
     uint32_t update_convert_us = 0;
 
@@ -158,6 +166,8 @@ class Hub75SPWM {
     enum class State { IDLE, SYNCING, UPLOADING };
     volatile State state = State::IDLE;
     volatile uint32_t frame_number = 0;
+    volatile float upload_clock_div = 0;    // 0 until start()
+    uint32_t upload_start_us = 0;
     alarm_id_t frame_alarm = 0;
 
     static int64_t frame_alarm_callback(alarm_id_t id, void *user_data);

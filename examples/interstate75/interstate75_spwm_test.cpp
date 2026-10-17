@@ -1,5 +1,6 @@
 #include <cstdio>
 #include "pico/stdlib.h"
+#include "hardware/clocks.h"
 
 #include "libraries/pico_graphics/pico_graphics.hpp"
 #include "libraries/interstate75/interstate75.hpp"
@@ -11,8 +12,8 @@
 Test pattern and tuning tool for HUB75 panels with S-PWM driver chips.
 
 Button A short press: next pattern
-Button A long press:  toggle avoid_tearing (T1: update() waits for the frame
-                      being sent, T0: converts immediately like Hub75)
+Button A long press:  next frame upload clock speed (experiment, D = PIO clock
+                      divider, see UPLOAD_CLOCK_DIVS)
 Button B short press: next register profile (SM16380SH 1/32 scan)
 Button B long press:  toggle interrupt stress test (S1): a timer interrupt
                       blocks the CPU for 50us every 5ms
@@ -85,6 +86,11 @@ const uint16_t RP2040_DEFAULT[] = {
 };
 
 const uint PROFILE_COUNT = count_of(SM16380SH_PROFILES) + 1;
+
+// Frame upload clock dividers to try. A data clock takes 6 PIO cycles, so at
+// 150MHz: 3 = 8.3MHz (default), 2.5 = 10MHz, 2 = 12.5MHz, 1.5 = 16.7MHz,
+// 1.25 = 20MHz, 1 = 25MHz. Fractional dividers jitter by one system clock.
+const float UPLOAD_CLOCK_DIVS[] = {3.0f, 2.5f, 2.0f, 1.5f, 1.25f, 1.0f};
 
 void draw_orientation() {
   int w = graphics.bounds.w;
@@ -159,6 +165,7 @@ int main() {
 
   uint pattern = 0;
   uint profile = 2;
+  uint clock_step = 0;
   uint frame = 0;
   absolute_time_t next_frame = get_absolute_time();
   repeating_timer_t stress_timer;
@@ -176,7 +183,8 @@ int main() {
         changed = true;
         break;
       case PressDetector::LONG:
-        hub75.avoid_tearing = !hub75.avoid_tearing;
+        clock_step = (clock_step + 1) % count_of(UPLOAD_CLOCK_DIVS);
+        hub75.set_upload_clock_div(UPLOAD_CLOCK_DIVS[clock_step]);
         changed = true;
         break;
       default:
@@ -204,8 +212,9 @@ int main() {
 
     if(changed) {
       overlay_until = now + 2000;
-      printf("pattern %u, R%u (%s), avoid tearing %s, stress %s\n",
-        pattern, profile, profile_name(profile), hub75.avoid_tearing ? "on" : "off", stress ? "on" : "off");
+      float div = hub75.get_upload_clock_div();
+      printf("pattern %u, R%u (%s), upload clock div %.2f (%.1fMHz), stress %s\n",
+        pattern, profile, profile_name(profile), div, clock_get_hz(clk_sys) / 6e6f / div, stress ? "on" : "off");
     }
 
     graphics.set_pen(0, 0, 0);
@@ -225,7 +234,7 @@ int main() {
 
     if(now < overlay_until) {
       char label[32];
-      snprintf(label, sizeof(label), "R%u T%u S%u", profile, hub75.avoid_tearing ? 1 : 0, stress ? 1 : 0);
+      snprintf(label, sizeof(label), "R%u D%.2f S%u", profile, hub75.get_upload_clock_div(), stress ? 1 : 0);
       graphics.set_pen(0, 0, 0);
       graphics.rectangle(Rect(0, 0, graphics.measure_text(label, 1) + 2, 9));
       graphics.set_pen(255, 255, 255);
@@ -237,8 +246,8 @@ int main() {
     hub75.update(&graphics);
     int64_t update_us = absolute_time_diff_us(start, get_absolute_time());
     if(++frame % 60 == 0) {
-      printf("update %lldus (waiting %luus, converting %luus), frame start %luus\n", // once per second
-        update_us, hub75.update_wait_us, hub75.update_convert_us, hub75.frame_start_us);
+      printf("upload %luus, update %lldus (waiting %luus, converting %luus), frame start %luus\n", // once per second
+        hub75.upload_us, update_us, hub75.update_wait_us, hub75.update_convert_us, hub75.frame_start_us);
     }
 
     // Draw at 60Hz, the same rate as the refresh
