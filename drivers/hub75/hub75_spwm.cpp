@@ -19,6 +19,15 @@ namespace pimoroni {
 // Maximum CLK frequency in MHz (most HUB75 panels handle about 20-25MHz)
 static const uint MAX_CLK_MHZ = 15;
 
+// Frame rate of the background refresh
+static const int64_t FRAME_US = 1000000 / 60;
+
+// Retry delay when a frame is due while update() writes the frame buffer
+static const int64_t FRAME_RETRY_US = 200;
+
+// The driver that the DMA IRQ handler belongs to (only one instance is supported)
+static Hub75SPWM *instance = nullptr;
+
 // Clocks per scan line: OE (GCLK) off, OE on, OE off
 static const uint GCLK_D1 = 28;
 static const uint GCLK_D2 = 4;
@@ -94,6 +103,8 @@ void Hub75SPWM::set_config_registers(const uint16_t *regs, uint count) {
 
 void Hub75SPWM::set_config_registers(const uint16_t *red, const uint16_t *green, const uint16_t *blue, uint count) {
     count = std::min(count, MAX_CONFIG_REGISTERS);
+    // The background refresh reads these, don't let it see a partial update
+    uint32_t status = save_and_disable_interrupts();
     memcpy(config_registers[0], red, count * sizeof(uint16_t));
     memcpy(config_registers[1], green, count * sizeof(uint16_t));
     memcpy(config_registers[2], blue, count * sizeof(uint16_t));
@@ -109,15 +120,8 @@ void Hub75SPWM::set_config_registers(const uint16_t *red, const uint16_t *green,
         }
     }
 
-    if(running) send_all_config_registers();
-}
-
-// One register is sent per frame upload, so upload one frame per register
-void Hub75SPWM::send_all_config_registers() {
-    for(auto i = 0u; i < config_register_count; i++) {
-        refresh();
-        sleep_ms(3);
-    }
+    restore_interrupts(status);
+    // One register is sent with every frame, all of them within ~0.5s
 }
 
 // Gamma corrected 10-bit greyscale value, with brightness and colour depth applied
@@ -128,14 +132,11 @@ uint32_t Hub75SPWM::greyscale(uint8_t v) {
 
 void Hub75SPWM::set_pixel(uint x, uint y, uint8_t r, uint8_t g, uint8_t b) {
     if(x >= width || y >= height) return;
-    if(hub75_spwm_pack::set(frame_buffer, x, y, width, scan_rows, greyscale(r), greyscale(g), greyscale(b))) {
-        dirty = true;
-    }
+    hub75_spwm_pack::set(frame_buffer, x, y, width, scan_rows, greyscale(r), greyscale(g), greyscale(b));
 }
 
 void Hub75SPWM::clear() {
     memset(frame_buffer, 0, buffer_size() * sizeof(uint32_t));
-    dirty = true;
 }
 
 // The row currently selected on the A-E lines
@@ -218,14 +219,29 @@ void Hub75SPWM::start() {
 
     dma_channel = dma_claim_unused_channel(true);
 
+    // The end of a frame upload restarts DCLK, so it must not wait for other handlers
+    instance = this;
+    irq_add_shared_handler(DMA_IRQ_1, dma_irq_handler, PICO_SHARED_IRQ_HANDLER_HIGHEST_ORDER_PRIORITY);
+    irq_set_priority(DMA_IRQ_1, PICO_HIGHEST_IRQ_PRIORITY);
+    irq_set_enabled(DMA_IRQ_1, true);
+
     running = true;
 
-    // Send every config register once, then start displaying
-    send_all_config_registers();
+    // Refresh the panel at FRAME_US intervals in the background
+    frame_alarm = add_alarm_in_us(0, frame_alarm_callback, this, true);
 }
 
 void Hub75SPWM::stop() {
     if(!running) return;
+
+    // Let the current frame finish, then stop the background refresh
+    uint32_t status = save_and_disable_interrupts();
+    cancel_alarm(frame_alarm);
+    restore_interrupts(status);
+    while(state != State::IDLE) tight_loop_contents();
+
+    irq_remove_handler(DMA_IRQ_1, dma_irq_handler);
+    instance = nullptr;
 
     stop_gclk();
 
@@ -391,7 +407,7 @@ void Hub75SPWM::stop_gclk() {
     pio_sm_set_enabled(pio, sm_clk_lat, false);
     pio_sm_init(pio, sm_clk_lat, clk_lat_prog_offs, &clk_lat_config);
     pio_sm_set_enabled(pio, sm_clk_lat, true);
-    sleep_us(10);
+    busy_wait_us(10); // Runs in the frame alarm IRQ, no sleeping
 }
 
 // Send VSYNC and the next config register (one per frame, round-robin)
@@ -419,9 +435,27 @@ void Hub75SPWM::load_config_register() {
     send_register(0x0155, 5);
 }
 
-// Upload the frame buffer (see hub75_spwm_pack.hpp): for every scan line and
-// channel, one 16-bit word per chip, each chain followed by a data latch.
-void Hub75SPWM::frame_transfer() {
+// Start of a frame (timer IRQ): VSYNC, commands and a register at row 0, then
+// start the frame upload in the background. Takes up to ~0.5ms.
+int64_t Hub75SPWM::frame_alarm_callback(alarm_id_t, void *user_data) {
+    return ((Hub75SPWM *)user_data)->start_frame();
+}
+
+int64_t Hub75SPWM::start_frame() {
+    // update() is writing to the frame buffer, try again shortly
+    if(converting) return FRAME_RETRY_US;
+    // The previous upload hasn't finished (shouldn't happen at 60Hz)
+    if(state != State::IDLE) return -FRAME_US;
+
+    state = State::SYNCING;
+    absolute_time_t start = get_absolute_time();
+    next_frame_due = delayed_by_us(start, FRAME_US);
+
+    // DMD_STM32 order: each frame is shown at the next frame's VSYNC, 1 frame later
+    stop_gclk();
+    load_config_register();
+
+    // Upload the frame buffer, the DMA IRQ handler finishes the frame
     pio_sm_set_enabled(pio, sm_frame, false);
     pio_sm_init(pio, sm_frame, frame_prog_offs, &frame_config);
     pio_sm_put(pio, sm_frame, width / CHANNELS_PER_CHIP - 1);
@@ -430,43 +464,59 @@ void Hub75SPWM::frame_transfer() {
     pio_sm_exec(pio, sm_frame, pio_encode_out(pio_null, 32));      // Empty OSR so the data is autopulled
     pio_sm_set_enabled(pio, sm_frame, true);
 
+    state = State::UPLOADING;
+    dma_channel_acknowledge_irq1(dma_channel); // Clear completions of the register writes
+    dma_channel_set_irq1_enabled(dma_channel, true);
     start_dma(sm_frame, frame_buffer, buffer_size(), 0);
-    wait_dma(sm_frame);
+    frame_start_us = absolute_time_diff_us(start, get_absolute_time());
 
-    pio_sm_set_enabled(pio, sm_frame, false);
+    // Negative: relative to when this alarm was due, so the frame rate doesn't drift
+    return -FRAME_US;
 }
 
-void Hub75SPWM::refresh() {
-    if(!running) return;
-
-    dirty = false;
-
-    if(vsync_after_data) {
-        // Stop DCLK, GCLK keeps running from the data clocks during the upload
-        pio_sm_set_enabled(pio, sm_clk_lat, false);
-        frame_transfer();
-
-        // stop_gclk() needs DCLK running to reach row 0
-        start_dclk();
-        stop_gclk();
-        load_config_register();
-    } else {
-        // DMD_STM32 order: each frame is shown at the next frame's VSYNC
-        stop_gclk();
-        load_config_register();
-        frame_transfer();
+void __not_in_flash_func(Hub75SPWM::dma_irq_handler)() {
+    if(instance && dma_irqn_get_channel_status(1, instance->dma_channel)) {
+        dma_irqn_acknowledge_channel(1, instance->dma_channel);
+        instance->finish_frame();
     }
+}
 
+// End of a frame upload (DMA IRQ): wait for the last words to be clocked out,
+// then restart DCLK so the panel keeps displaying.
+void __not_in_flash_func(Hub75SPWM::finish_frame)() {
+    dma_channel_set_irq1_enabled(dma_channel, false);
+    hub75_spwm_wait_tx_stall(pio, sm_frame);
+    pio_sm_set_enabled(pio, sm_frame, false);
     start_dclk();
+    state = State::IDLE;
 }
 
 // Free-running CLK is the reference clock (DCLK) for the chips' PWM
-void Hub75SPWM::start_dclk() {
+void __not_in_flash_func(Hub75SPWM::start_dclk)() {
     pio_sm_init(pio, sm_clk_lat, clk_lat_prog_offs + hub75_spwm_clk_lat_offset_free_run, &clk_lat_config);
     pio_sm_set_enabled(pio, sm_clk_lat, true);
 }
 
-void Hub75SPWM::update(PicoGraphics *graphics, bool force) {
+void Hub75SPWM::update(PicoGraphics *graphics) {
+    // Convert between frame uploads, so a frame never shows half of an update,
+    // and only when the conversion ends before the next frame is due, so it doesn't
+    // delay frames (irregular frame timing makes the panel flicker).
+    while(running) {
+        while(state != State::IDLE) tight_loop_contents();
+        int64_t time_left = absolute_time_diff_us(get_absolute_time(), next_frame_due);
+        if(time_left < (int64_t)convert_us + 500) {
+            // Not enough time left: wait for the next frame to start, then try again
+            while(state == State::IDLE) tight_loop_contents();
+            continue;
+        }
+        converting = true;
+        __dmb();
+        // The frame alarm could have fired between the check and setting the flag
+        if(state == State::IDLE) break;
+        converting = false;
+    }
+    absolute_time_t convert_start = get_absolute_time();
+
     if(graphics->pen_type == PicoGraphics::PEN_RGB888) {
         uint32_t *p = (uint32_t *)graphics->frame_buffer;
         for(auto y = 0u; y < height; y++) {
@@ -487,9 +537,8 @@ void Hub75SPWM::update(PicoGraphics *graphics, bool force) {
         });
     }
 
-    if(force || dirty) {
-        refresh();
-    }
+    convert_us = absolute_time_diff_us(convert_start, get_absolute_time());
+    converting = false;
 }
 
 }

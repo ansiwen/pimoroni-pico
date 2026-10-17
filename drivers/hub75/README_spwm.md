@@ -37,7 +37,7 @@ int main() {
     hub75.start();
     while(true) {
         // draw with graphics...
-        hub75.update(&graphics);  // blocks while the frame is uploaded
+        hub75.update(&graphics);  // converts the image, the panel is refreshed in the background
     }
 }
 ```
@@ -69,8 +69,10 @@ See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern.
 3. If dark colours flicker or show noise, try a lower `hub75.colour_depth`. The default is 10 bits; DMD_STM32 uses 4.
 4. `hub75.brightness` (0-255) scales the greyscale values sent to the panel. Like `colour_depth`, it is applied when pixels are set, so it takes effect on the next `update()`.
 
-`update()` skips the upload when the image, `brightness` and `colour_depth` are unchanged, because each upload briefly disturbs the panel's PWM. `refresh()` always uploads.
+## How it works
 
-Known issues:
-- Each upload makes the whole picture flicker briefly, which is visible when scrolling.
-- With DMD_STM32's command order, the panel shows each frame only at the next upload. `hub75.vsync_after_data = true` sends VSYNC after the data instead. This setting is experimental.
+`start()` begins refreshing the panel at a steady 60Hz in the background. A timer interrupt starts each frame: it waits for the start of the scan (row 0), sends VSYNC, the pre-active commands and one configuration register, then starts the DMA transfer of the frame buffer. A DMA interrupt restarts DCLK when the transfer is done. This takes about 0.5ms of CPU per frame, about 3%.
+
+`update()` converts a PicoGraphics image into the frame buffer, about 3.5ms for 128x64. It waits until the current frame has been sent, and only converts when it can finish before the next frame is due, so a frame never shows half of an update and the frame rate stays steady. Irregular uploads make the whole picture flicker, so the frame is re-sent even when nothing changed.
+
+The panel shows a frame at the VSYNC of the following frame, so an update appears 17-33ms after `update()` returns.

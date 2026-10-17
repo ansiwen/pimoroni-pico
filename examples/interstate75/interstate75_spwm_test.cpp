@@ -11,15 +11,13 @@
 Test pattern and tuning tool for HUB75 panels with S-PWM driver chips.
 
 Button A short press: next pattern
-Button A long press:  next mode: C0 V0, C1 V0, C0 V1, C1 V1
-                      C1 = upload every frame at a steady 60Hz, even if unchanged
-                      V1 = VSYNC after the frame data (vsync_after_data)
 Button B short press: next register profile (SM16380SH 1/32 scan)
 Button B long press:  toggle interrupt stress test (S1): a timer interrupt
                       blocks the CPU for 50us every 5ms
 
 The current settings are shown in the top-left corner for two seconds after
-each change, and printed over USB serial.
+each change, and printed over USB serial. Every second, the time spent in
+update() and in the driver's background frame start are printed too.
 
 Patterns:
  0. Orientation: red top-left, green top-right, blue bottom-left, white bottom-right
@@ -159,8 +157,6 @@ int main() {
 
   uint pattern = 0;
   uint profile = 2;
-  uint mode = 0;
-  bool continuous = false;
   uint frame = 0;
   absolute_time_t next_frame = get_absolute_time();
   repeating_timer_t stress_timer;
@@ -175,12 +171,6 @@ int main() {
     switch(button_a.poll()) {
       case PressDetector::SHORT:
         pattern = (pattern + 1) % 3;
-        changed = true;
-        break;
-      case PressDetector::LONG:
-        mode = (mode + 1) % 4;
-        continuous = mode & 1;
-        hub75.vsync_after_data = mode & 2;
         changed = true;
         break;
       default:
@@ -208,9 +198,8 @@ int main() {
 
     if(changed) {
       overlay_until = now + 2000;
-      printf("pattern %u, R%u (%s), vsync %s data, %s, stress %s\n",
-        pattern, profile, profile_name(profile), hub75.vsync_after_data ? "after" : "before",
-        continuous ? "upload at 60Hz" : "upload on change", stress ? "on" : "off");
+      printf("pattern %u, R%u (%s), stress %s\n",
+        pattern, profile, profile_name(profile), stress ? "on" : "off");
     }
 
     graphics.set_pen(0, 0, 0);
@@ -230,32 +219,26 @@ int main() {
 
     if(now < overlay_until) {
       char label[32];
-      snprintf(label, sizeof(label), "R%u C%u V%u S%u", profile, continuous ? 1 : 0, hub75.vsync_after_data ? 1 : 0, stress ? 1 : 0);
+      snprintf(label, sizeof(label), "R%u S%u", profile, stress ? 1 : 0);
       graphics.set_pen(0, 0, 0);
       graphics.rectangle(Rect(0, 0, graphics.measure_text(label, 1) + 2, 9));
       graphics.set_pen(255, 255, 255);
       graphics.text(label, Point(1, 1), -1, 1);
     }
 
-    // Only uploads to the panel if the image or settings changed
-    if(continuous) {
-      // Upload every frame at a fixed rate, so every displayed frame has the same timing
-      absolute_time_t start = get_absolute_time();
-      hub75.update(&graphics, true);
-      int64_t upload_us = absolute_time_diff_us(start, get_absolute_time());
-      if(++frame % 60 == 0) printf("upload %lldus\n", upload_us); // once per second
-
-      next_frame = delayed_by_us(next_frame, 1000000 / 60);
-      if(absolute_time_diff_us(get_absolute_time(), next_frame) < 0) {
-        next_frame = get_absolute_time(); // Too slow for 60Hz, don't try to catch up
-      }
-      sleep_until(next_frame);
-      continue;
+    // The driver refreshes the panel in the background, update() only converts the image
+    absolute_time_t start = get_absolute_time();
+    hub75.update(&graphics);
+    int64_t update_us = absolute_time_diff_us(start, get_absolute_time());
+    if(++frame % 60 == 0) {
+      printf("update %lldus, frame start %luus\n", update_us, hub75.frame_start_us); // once per second
     }
 
-    hub75.update(&graphics);
-    next_frame = get_absolute_time();
-
-    sleep_ms(pattern == 2 ? 20 : 10);
+    // Draw at 60Hz, the same rate as the refresh
+    next_frame = delayed_by_us(next_frame, 1000000 / 60);
+    if(absolute_time_diff_us(get_absolute_time(), next_frame) < 0) {
+      next_frame = get_absolute_time(); // Too slow for 60Hz, don't try to catch up
+    }
+    sleep_until(next_frame);
   }
 }
