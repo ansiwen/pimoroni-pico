@@ -46,7 +46,7 @@ int main() {
 }
 ```
 
-The driver uses 3 state machines and 23 instructions of `pio0`, and one DMA channel. It needs `width * height * 12` bytes of RAM, 96KB for a 128x64 panel, plus the PicoGraphics frame buffer. The default pins match Interstate 75 and Interstate 75 W:
+The driver uses 3 state machines and 28 instructions of `pio0`, and one DMA channel. It needs `width * height * 4` bytes of RAM, 32KB for a 128x64 panel, plus the PicoGraphics frame buffer. The default pins match Interstate 75 and Interstate 75 W:
 - R0-B1: GPIO 0-5
 - A-E: GPIO 6-10
 - CLK: GPIO 11
@@ -71,4 +71,8 @@ See `examples/interstate75/interstate75_spwm_test.cpp` for a test pattern.
 3. If dark colours flicker or show noise, try a lower `hub75.colour_depth`. The default is 10 bits; DMD_STM32 uses 4.
 4. `hub75.brightness` (0-255) scales the greyscale values sent to the panel. It takes effect on the next `update()`.
 
-`update()` skips the upload when the image, `brightness` and `colour_depth` are unchanged. `refresh()` always uploads. A frame is first converted into a 64KB stream and then sent with a single DMA transfer, at the same clock rate as the free-running DCLK. This keeps the panel's rows running evenly during the upload. After the data, the driver sends VSYNC, which makes the panel show the new frame. DMD_STM32 sends VSYNC before the data, so each frame only appears with the next upload. To get that behaviour, set `hub75.vsync_after_data = false`.
+`update()` skips the upload when the image, `brightness` and `colour_depth` are unchanged, because each upload briefly disturbs the panel's PWM. `refresh()` always uploads.
+
+Known issues:
+- Each upload makes the whole picture flicker briefly, which is visible when scrolling.
+- With DMD_STM32's command order, the panel shows each frame only at the next upload. `hub75.vsync_after_data = true` sends VSYNC after the data instead. This setting is experimental.

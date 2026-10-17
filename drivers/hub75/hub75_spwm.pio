@@ -14,35 +14,30 @@
 ; OUT pins are R0, G0, B0, R1, G1, B1
 ; SET pin is LAT
 ;
-; Takes a stream of bytes (4 per FIFO word, LSB first), one per CLK pulse:
-; - bits 0-5: R0, G0, B0, R1, G1, B1
-; - bit 6: LAT level for this clock
-; - bit 7: must be 0
+; The first FIFO word is a control word:
+; - number of clocks - 1 (16 LSBs)
+; - number of clocks - number of LAT clocks - 1 (16 MSBs)
+; followed by one FIFO word per clock with the 6 RGB bits in the LSBs.
 ;
-; The chips count the clocks with LAT high to tell a data latch (1 clock)
-; from a register write (5 clocks) etc. Stalls with CLK low when the FIFO
-; runs empty, LAT keeps its last level.
-;
-; Each clock takes 16 cycles, the same as the free running DCLK in
-; hub75_spwm_clk_lat, so the rows keep advancing at the same rate while a
-; frame is uploaded. At 6.67ns per cycle (150MHz):
-; - cycle 0: CLK falls
-; - cycle 3: LAT changes (47ns setup)
-; - cycle 5: RGB changes (33ns after the falling edge, 33ns setup)
-; - cycle 10-15: CLK high (40ns)
-; The panel's 74HC buffers distort shorter pulses.
+; LAT is raised for the last N clocks of the transfer, which is how these chips
+; distinguish a data latch (1 clock) from a register write (5 clocks).
+; IRQ 7 is raised (not routed to the CPU) once the transfer is complete.
 
 .wrap_target
-    out x, 6            side 0      ; RGB bits
-    out y, 2            side 0      ; LAT bit
-    jmp !y, lat_low     side 0
-    set pins, 1         side 0
-    jmp data            side 0
-lat_low:
-    set pins, 0         side 0 [1]
-data:
-    mov pins, x         side 0 [4]
-    nop                 side 1 [5]  ; Rising edge on CLK
+    pull block          side 0
+    out x, 16           side 0 ; Clock count
+    out y, 16           side 0 ; Clocks before LAT goes high
+loop:
+    pull block          side 0
+    out pins, 6         side 0 ; Output R0, G0, B0, R1, G1, B1
+    out null, 26        side 1 [1] ; Rising edge on CLK
+    jmp y--, no_latch   side 0
+    set pins, 1         side 0 ; Assert LAT for the remaining clocks
+no_latch:
+    jmp x--, loop       side 0
+    set pins, 0         side 0
+    mov pins, null      side 0
+    irq nowait 7        side 0
 .wrap
 
 
@@ -58,18 +53,15 @@ data:
 ;
 ; Jumping to `free_run` generates a continuous CLK (DCLK), which the chips use
 ; as the reference clock for their internal PWM.
-;
-; Same timing as hub75_spwm_data: LAT/OE change 20ns after the falling edge
-; with 47ns setup, CLK is high for 40ns.
 
 .wrap_target
-    pull block          side 0 [2]
-    out pins, 2         side 0 [6]
-    out null, 30        side 1 [5]
+    pull block          side 0
+    out pins, 2         side 0
+    out null, 30        side 1 [1]
 .wrap
 public free_run:
-    nop                 side 0 [9]
-    jmp free_run        side 1 [5] ; 16 cycles, as hub75_spwm_data
+    nop                 side 0
+    jmp free_run        side 1
 
 
 .program hub75_spwm_clk_cnt
@@ -115,8 +107,7 @@ static inline pio_sm_config hub75_spwm_data_program_init(PIO pio, uint sm, uint 
     sm_config_set_out_pins(&c, rgb_base_pin, 6);
     sm_config_set_set_pins(&c, lat_pin, 1);
     sm_config_set_sideset_pins(&c, clk_pin);
-    sm_config_set_out_shift(&c, true, true, 32);
-    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    sm_config_set_out_shift(&c, true, false, 32);
     pio_sm_init(pio, sm, offset, &c);
     return c;
 }

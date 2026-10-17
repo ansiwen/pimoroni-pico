@@ -58,9 +58,9 @@ class Hub75SPWM {
     // see flicker or noise in dark colours.
     uint colour_depth = 10;
 
-    // Send VSYNC after uploading a frame, so it is shown immediately.
-    // DMD_STM32 sends it before, which shows each frame one upload late.
-    bool vsync_after_data = true;
+    // Experimental: send VSYNC after the frame data instead of before it.
+    // In DMD_STM32's order (false) each frame is only shown at the next upload.
+    bool vsync_after_data = false;
 
     // Interstate 75 (W) pinout
     uint pin_r0 = 0;      // R0, G0, B0, R1, G1, B1 must be consecutive
@@ -93,8 +93,7 @@ class Hub75SPWM {
     void stop(irq_handler_t handler);
     void pio_irq();
 
-    // Upload the back buffer to the panel. Blocks for the length of the transfer
-    // (about 7ms for 128x64), the panel keeps displaying while uploading.
+    // Upload the back buffer to the panel. Blocks for the length of the transfer.
     void refresh();
 
     // Copy a PicoGraphics frame buffer to the back buffer and upload it to the panel.
@@ -128,21 +127,17 @@ class Hub75SPWM {
     pio_sm_config clk_cnt_config;
 
     int dma_channel = -1;
+    dma_channel_config dma_config;
 
-    // The whole frame as it is clocked out: one byte per CLK pulse with
-    // R0, G0, B0, R1, G1, B1 in bits 0-5 and LAT in bit 6
-    uint8_t *frame_stream = nullptr;
-    uint frame_stream_len = 0;
-    // Register write commands, in the same format
-    uint8_t *register_stream = nullptr;
-    uint register_stream_len = 0;
+    // Two line buffers, one being sent by DMA while the other is filled
+    uint8_t *line_buffer[2] = {nullptr, nullptr};
 
     bool running = false;
 
-    // Set when the back buffer or display settings differ from frame_stream
+    // Set when the back buffer or display settings differ from the panel
     bool dirty = true;
-    uint8_t built_brightness = 0;
-    uint built_colour_depth = 0;
+    uint8_t uploaded_brightness = 0;
+    uint uploaded_colour_depth = 0;
     volatile bool gclk_running = false;
     volatile bool gclk_stop_requested = false;
     volatile uint row = 0;
@@ -155,17 +150,17 @@ class Hub75SPWM {
     void send_latches(uint count) { send_clocks(count, 0b01); }
     void send_oe(uint count) { send_clocks(count, 0b10); }
     void send_vsync();
-    uint8_t *build_register(uint8_t *buf, uint16_t red, uint16_t green, uint16_t blue, uint latches);
-    void send_stream(const uint8_t *buf, uint len);
+    void send_register(uint16_t value, uint latches) { send_register(value, value, value, latches); }
+    void send_register(uint16_t red, uint16_t green, uint16_t blue, uint latches);
+    void restart_data_sm(uint latches);
+    void wait_data_sm();
 
     void init_mux();
     void start_gclk();
     void stop_gclk();
-    void pause_dclk();
-    void resume_dclk();
-    void frame_sync();
-    bool needs_build();
-    void build_frame();
+    void start_dclk();
+    void load_config_register();
+    void data_transfer();
     void fill_line(uint8_t *buf, uint y, uint channel);
 };
 
