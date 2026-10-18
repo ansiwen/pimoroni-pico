@@ -148,6 +148,7 @@ void print_status() {
   printf("profile %s, gclk_bits %u, ", FM6373_PROFILES[profile].name, hub75.get_gclk_bits());
   if(hub75.gclk_d1) printf("GCLK %u/%u/%u", hub75.gclk_d1, hub75.gclk_d2, hub75.gclk_d3);
   else printf("GCLK automatic");
+  printf(", first row repeated: %s", hub75.repeat_first_row ? "yes" : "no");
   printf(", brightness %u\n", hub75.brightness);
   printf("system clock %.0fMHz, clock div %.3f: upload %.2fMHz, DCLK %.2fMHz\n",
     sys_mhz, div, sys_mhz / (6 * (div < 1 ? 1 : div)), sys_mhz / (6 * div));
@@ -171,6 +172,7 @@ void print_help() {
     "  m CLK LAT DATA shift register pins, eg. m a b c, m a - c (no latch)\n"
     "  i              invert the shift register data\n"
     "  g N            gclk_bits 12-15 (position + 1 of the greyscale MSB)\n"
+    "  L              repeat the 12 CLK first row pulse every loop (groups = reg 03 + 1)\n"
     "  t D1 D2 D3     CLKs per scan line with OE low, high, low, 0 0 0: automatic\n"
     "                 (28 4 96, shift register 38 4 86)\n"
     "  d N            clock divider: system clock / (6 * N), eg. d 2. Below 1, eg. d 2/3,\n"
@@ -443,6 +445,7 @@ void command(char *line) {
       restart(hub75.lanes, hub75.row_driver);
       break;
     case 'g': hub75.set_gclk_bits(n); break;
+    case 'L': hub75.repeat_first_row = !hub75.repeat_first_row; break;
     case 't': {
       unsigned d1, d2, d3;
       bool automatic = sscanf(args, "%u %u %u", &d1, &d2, &d3) == 3 && !d1 && !d2 && !d3;

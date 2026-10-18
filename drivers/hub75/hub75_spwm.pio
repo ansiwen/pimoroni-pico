@@ -120,24 +120,40 @@ public free_run:
 ; Side-set and OUT pin is OE (used as GCLK), OUT is only used by exec
 ;
 ; Counts CLK rising edges and drives OE through three segments per scan line:
-; low, high, low. ISR and OSR hold a control word with the number of CLKs - 1
-; of each segment in 8 bits, first segment in the LSBs, loaded by the CPU with
-; `pull` and `mov isr, osr` before the SM is enabled.
+; low, high, low. ISR holds a control word: the number of CLKs - 1 of the first
+; segment (8 bits, LSBs), the number of scan lines - 1 between two first rows
+; (16 bits) and the number of CLKs - 1 of the third segment (8 bits). The
+; second segment's CLKs - 1 are patched into `set x` at w4 by the CPU.
+; Y holds the scan lines left until the next first row. Both are loaded by the
+; CPU with pio_sm_exec before the SM is enabled.
 ; At the start of each scan line, IRQ 0 is raised so hub75_spwm_rows switches
 ; the row address lines.
+; The first row of every loop through all scan lines and groups gets a 12 CLK
+; OE pulse instead (chips like the ICND2055 and FM6373 count rows that way).
+; With Y = 0xffffffff at the start, this never happens within a frame.
+; At 25MHz (6 cycles per CLK) this path is one instruction too long, and the
+; 12 CLK pulse becomes 13 CLKs; the other pulses and the line lengths stay exact.
 ;
-; The segments are unrolled so that only 3 instructions run between the last
-; CLK of a scan line and the wait for the next one: at 25MHz (6 cycles per CLK)
-; a loop over the segments missed one CLK per scan line.
+; The segments are unrolled so that only a few instructions run between the
+; last CLK of a segment and the wait for the next one: at 25MHz (6 cycles per
+; CLK) a loop over the segments missed one CLK per scan line.
 
 .wrap_target
+    mov osr, isr
     out x, 8            side 0  ; First segment, OE low
     irq nowait 0                ; hub75_spwm_rows selects the next row
 count1:
     wait 0 pin 0
     wait 1 pin 0
     jmp x--, count1
-    out x, 8            side 1  ; Second segment, OE high
+    jmp y--, other_rows
+    out y, 16                   ; First row of a loop: 12 CLKs, reload Y
+    set x, 11           side 1
+    jmp count2
+other_rows:
+    out null, 16
+public w4:
+    set x, 3            side 1  ; Second segment, OE high, patched: CLKs - 1
 count2:
     wait 0 pin 0
     wait 1 pin 0
@@ -147,7 +163,6 @@ count3:
     wait 0 pin 0
     wait 1 pin 0
     jmp x--, count3
-    mov osr, isr
 .wrap
 
 

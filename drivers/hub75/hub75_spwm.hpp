@@ -101,8 +101,15 @@ class Hub75SPWM {
     // frame. 0 for DMD_STM32's: 28, 4, 96, or 38, 4, 86 for SHIFT_REGISTER,
     // which gives the row driver more time to switch.
     uint gclk_d1 = 0;
-    uint gclk_d2 = 0;
+    uint gclk_d2 = 0;   // 1-32
     uint gclk_d3 = 0;
+
+    // Start every loop through all groups and scan lines with the 12 CLK OE
+    // pulse of the first row, not only the first one after VSYNC, as the
+    // ICND2055 programming guide asks for. The number of groups is register
+    // 0x03 + 1. Applied from the next frame. At 25MHz CLK (clock div 1 at
+    // 150MHz) that pulse is 13 CLKs.
+    bool repeat_first_row = false;
 
     // Interstate 75 (W) pinout
     uint pin_r0 = 0;      // R0, G0, B0, R1, G1, B1 must be consecutive

@@ -490,17 +490,34 @@ void Hub75SPWM::init_mux() {
 void Hub75SPWM::start_gclk() {
     pio_sm_init(pio_gclk, sm_clk_cnt, clk_cnt_prog_offs, &clk_cnt_config);
 
-    // Clocks - 1 of the three segments (OE low, high, low), 8 bits each.
+    // CLKs of the three segments (OE low, high, low).
     // Shift register row drivers need more time to switch (DMD_STM32).
     bool shift = row_driver == RowDriver::SHIFT_REGISTER;
     uint d1 = gclk_d1 ? gclk_d1 : (shift ? 38 : 28);
     uint d2 = gclk_d2 ? gclk_d2 : 4;
     uint d3 = gclk_d3 ? gclk_d3 : (shift ? 86 : 96);
-    auto segment = [](uint clocks) { return std::clamp(clocks, 1u, 256u) - 1; };
-    uint32_t control = segment(d3) << 16 | segment(d2) << 8 | segment(d1);
+    auto segment = [](uint clocks, uint max) { return std::clamp(clocks, 1u, max) - 1; };
+
+    // The second segment is patched into `set x` (5 bits), the others go in
+    // the control word with the scan lines between two first rows
+    uint offset = clk_cnt_prog_offs + hub75_spwm_clk_cnt_offset_w4;
+    pio_gclk->instr_mem[offset] = (hub75_spwm_clk_cnt_program.instructions[hub75_spwm_clk_cnt_offset_w4] & ~0x1fu)
+                                  | segment(d2, 32);
+    uint loop = 0;
+    if(repeat_first_row) {
+        for(auto i = 0u; i < config_register_count; i++) {
+            if((config_registers[0][i] >> 8) == 0x03) loop = ((config_registers[0][i] & 0x7f) + 1) * scan_lines;
+        }
+    }
+    loop = std::min(loop, 0x10000u);
+    uint32_t control = segment(d3, 256) << 24 | ((loop - 1) & 0xffff) << 8 | segment(d1, 256);
     pio_sm_put(pio_gclk, sm_clk_cnt, control);
     pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_pull(false, true));
-    pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_mov(pio_isr, pio_osr)); // Keep a copy
+    pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_mov(pio_isr, pio_osr)); // Kept for every scan line
+    // Scan lines until the next first row: init_mux() sent the first one
+    pio_sm_put(pio_gclk, sm_clk_cnt, loop ? loop - 1 : 0xffffffff);
+    pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_pull(false, true));
+    pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_mov(pio_y, pio_osr));
 
     pio_sm_set_enabled(pio_gclk, sm_clk_cnt, true);
 
