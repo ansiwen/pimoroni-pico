@@ -194,7 +194,7 @@ The FM6373 profiles are DMD_STM32's 1/64 scan profiles and the three made for HX
 | `FM6373_REG18` | P2 - FM6373 - HX6258SP - 1/40 |
 | `FM6373_REG13` | P1.86 - FM6373 - HX6258 - 1/43 |
 
-On a P2.5 128x64 1/64 panel with FM6373D drivers and a 6258K row driver, only `FM6373_REG6` doesn't show ghosting.
+On a P2.5 128x64 1/64 panel with FM6373D drivers and a 6258K row driver, only `FM6373_REG6` doesn't show ghosting. The driver shows each image in 32 PWM loops instead of the profiles' 64 (register 0x03), to reach 60 images per second, and sets the greyscale bit position to match. That works with `FM6373_REG6`; the other profiles have fewer greyscale levels per loop, and their brightest colours clip with 32 loops.
 
 The chips after the pitch are the panel's row drivers. On a P2.5 128x64 panel with C7262FJ row drivers, `SM16380SH_REG7`, `SM16380SH_REG32` and `SM16380SH_REG34` show ghost pixels, the others don't. `SM16380SH_REG1` is the darkest. `SM16380SH_REG8` is the brightest, but can show noise in large bright areas, most with `set_clock_div(1)`.
 

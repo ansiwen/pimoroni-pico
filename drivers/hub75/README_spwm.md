@@ -32,6 +32,8 @@ hub75.set_lanes(Hub75SPWM::Lanes::SINGLE);
 hub75.start();
 ```
 
+The FM6373 follows Chipone's ICND2055/ICND2065 programming guide: it shows each image in `groups` PWM loops through all scan lines (register 0x03 + 1), and only takes a new image (VSYNC) once they are done. With DMD_STM32's 64 groups and 128 CLKs per scan line, a 64 scan line panel showed at most 23 images per second at 12.5MHz. The driver uses 32 groups and 80 CLKs per scan line instead (13ms per image, 60Hz), and sets `gclk_bits` to match register 0x07 (12 with REG 6). The scan line can't be much shorter: the chip shows it for ~48 CLKs after its OE pulse, and if the row changes before that, every line shows faintly in the next row.
+
 For an unknown panel, `examples/interstate75/interstate75_spwm_probe.cpp` shows which pixels each data line, scan line and chain position drive.
 
 ## Usage

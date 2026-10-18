@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <algorithm>
 #include "pico/stdlib.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
@@ -145,7 +146,7 @@ void print_status() {
   }
   float sys_mhz = clock_get_hz(clk_sys) / 1e6f;
   float div = hub75.get_clock_div();
-  printf("profile %s, gclk_bits %u, ", FM6373_PROFILES[profile].name, hub75.get_gclk_bits());
+  printf("profile %s, groups %u, gclk_bits %u, ", FM6373_PROFILES[profile].name, hub75.groups, hub75.get_gclk_bits());
   if(hub75.gclk_d1) printf("GCLK %u/%u/%u", hub75.gclk_d1, hub75.gclk_d2, hub75.gclk_d3);
   else printf("GCLK automatic");
   printf(", first row repeated: %s", hub75.repeat_first_row ? "yes" : "no");
@@ -171,7 +172,9 @@ void print_help() {
     "  r shift|decoder        row driver\n"
     "  m CLK LAT DATA shift register pins, eg. m a b c, m a - c (no latch)\n"
     "  i              invert the shift register data\n"
-    "  g N            gclk_bits 12-15 (position + 1 of the greyscale MSB)\n"
+    "  G N            groups (register 03 + 1), 0: the profile's; sets gclk_bits to match\n"
+    "  g N            gclk_bits 12-15 (position + 1 of the greyscale MSB), until the\n"
+    "                 registers are applied again (G, w, x, profile)\n"
     "  L              repeat the 12 CLK first row pulse every loop (groups = reg 03 + 1)\n"
     "  t D1 D2 D3     CLKs per scan line with OE low, high, low, 0 0 0: automatic\n"
     "                 (28 4 96, shift register 38 4 86)\n"
@@ -446,6 +449,7 @@ void command(char *line) {
       break;
     case 'g': hub75.set_gclk_bits(n); break;
     case 'L': hub75.repeat_first_row = !hub75.repeat_first_row; break;
+    case 'G': hub75.groups = std::min(n, 128L); apply_work(); break;
     case 't': {
       unsigned d1, d2, d3;
       bool automatic = sscanf(args, "%u %u %u", &d1, &d2, &d3) == 3 && !d1 && !d2 && !d3;

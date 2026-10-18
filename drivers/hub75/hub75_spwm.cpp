@@ -107,9 +107,10 @@ void Hub75SPWM::load_chip_defaults() {
             set_config_registers(ICND2055_CONFIG, count_of(ICND2055_CONFIG));
             break;
         case Chip::FM6373:
-            // DMD_STM32 uses 14, but on a P2.5 128x64 FM6373D panel the
-            // brightest values all looked the same, as with the SM16380SH
-            gclk_bits = 13;
+            // gclk_bits follows from the registers, see fix_config_registers().
+            // 32 groups instead of REG 6's 64 reach 60Hz at 12.5MHz with 80 CLK
+            // scan lines and 64 scan lines (13ms per image).
+            groups = 32;
             set_config_registers(FM6373_CONFIG[0], FM6373_CONFIG[1], FM6373_CONFIG[2], count_of(FM6373_CONFIG[0]));
             break;
     }
@@ -130,14 +131,7 @@ bool Hub75SPWM::set_lanes(Lanes lanes) {
     scan_lines = new_lines;
     chain = new_chain;
     clear();
-    // Register 0x02 holds the number of scan lines
-    for(auto c = 0u; c < 3; c++) {
-        for(auto i = 0u; i < config_register_count; i++) {
-            if((config_registers[c][i] >> 8) == 0x02) {
-                config_registers[c][i] = 0x0200 | ((scan_lines - 1) & 0xff);
-            }
-        }
-    }
+    fix_config_registers();
     return true;
 }
 
@@ -159,18 +153,32 @@ void Hub75SPWM::set_config_registers(const uint16_t *red, const uint16_t *green,
     memcpy(config_registers[2], blue, count * sizeof(uint16_t));
     config_register_count = count;
     next_config_register = 0;
-
-    // Register 0x02 holds the number of scan lines - 1
-    for(auto c = 0u; c < 3; c++) {
-        for(auto i = 0u; i < count; i++) {
-            if((config_registers[c][i] >> 8) == 0x02) {
-                config_registers[c][i] = 0x0200 | ((scan_lines - 1) & 0xff);
-            }
-        }
-    }
-
+    fix_config_registers();
     restore_interrupts(status);
     // One register is sent with every frame, all of them within ~0.5s
+}
+
+// Registers set by the driver whatever the profile: 0x02, the scan lines - 1,
+// and for the FM6373 0x03, the groups - 1, and the greyscale MSB that follows
+void Hub75SPWM::fix_config_registers() {
+    uint reg07 = 0;
+    for(auto c = 0u; c < 3; c++) {
+        for(auto i = 0u; i < config_register_count; i++) {
+            uint16_t &r = config_registers[c][i];
+            if((r >> 8) == 0x02) r = 0x0200 | ((scan_lines - 1) & 0xff);
+            if((r >> 8) == 0x03 && chip == Chip::FM6373 && groups) r = 0x0300 | ((groups - 1) & 0x7f);
+            if((r >> 8) == 0x07) reg07 = std::max(reg07, (uint)(r & 0xff));
+        }
+    }
+    if(chip == Chip::FM6373 && groups && reg07) {
+        // ICND2055 programming guide: greyscale levels = groups * reg 0x07 * 4.
+        // The MSB of the greyscale words must be the top bit of that range, or
+        // bright values clip (one bit too high) or it's half as bright.
+        uint levels = groups * reg07 * 4;
+        uint bits = 1;
+        while((1u << bits) < levels) bits++;
+        gclk_bits = std::clamp(bits, 12u, 15u);
+    }
 }
 
 // Gamma corrected 10-bit greyscale value, with brightness and colour depth applied
@@ -492,10 +500,14 @@ void Hub75SPWM::start_gclk() {
 
     // CLKs of the three segments (OE low, high, low).
     // Shift register row drivers need more time to switch (DMD_STM32).
+    // The FM6373 shows a scan line for ~48 CLKs after OE (with REG 6), the row
+    // must not change before that, or each line shows faintly in the next row;
+    // 80 CLKs instead of 128 make its PWM cycle short enough for 60Hz.
     bool shift = row_driver == RowDriver::SHIFT_REGISTER;
-    uint d1 = gclk_d1 ? gclk_d1 : (shift ? 38 : 28);
+    bool fm6373 = chip == Chip::FM6373;
+    uint d1 = gclk_d1 ? gclk_d1 : (fm6373 ? 20 : shift ? 38 : 28);
     uint d2 = gclk_d2 ? gclk_d2 : 4;
-    uint d3 = gclk_d3 ? gclk_d3 : (shift ? 86 : 96);
+    uint d3 = gclk_d3 ? gclk_d3 : (fm6373 ? 56 : shift ? 86 : 96);
     auto segment = [](uint clocks, uint max) { return std::clamp(clocks, 1u, max) - 1; };
 
     // The second segment is patched into `set x` (5 bits), the others go in

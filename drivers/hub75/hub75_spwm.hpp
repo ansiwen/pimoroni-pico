@@ -111,6 +111,16 @@ class Hub75SPWM {
     // 150MHz) that pulse is 13 CLKs.
     bool repeat_first_row = false;
 
+    // FM6373: the number of groups (PWM loops through all scan lines per image,
+    // register 0x03 + 1), which replaces the profile's value, 0 to keep it.
+    // Each image takes groups * scan lines * CLKs per scan line, eg. 32 * 64 * 80
+    // = 13ms at 12.5MHz, and the chips only take a new image after that. The
+    // greyscale MSB (gclk_bits) follows from this and register 0x07. Default 32,
+    // applied by set_config_registers(). It must give more than 2048 greyscale
+    // levels (gclk_bits 12 or more): 32 groups work with REG 6 (0x07 = 0x16), the
+    // profiles with 0x07 = 0x10 need 64 (~23 images per second at 12.5MHz).
+    uint groups = 0;
+
     // Interstate 75 (W) pinout
     uint pin_r0 = 0;      // R0, G0, B0, R1, G1, B1 must be consecutive
     uint pin_row_a = 6;   // A, B, C, D, E must be consecutive
@@ -285,6 +295,7 @@ class Hub75SPWM {
     // Frame buffer words per chain position: 1 with only R0, G0, B0
     uint words_per_pixel() const { return lanes == Lanes::SINGLE ? 1 : 2; }
     uint32_t row_shift_sequence(bool data) const;
+    void fix_config_registers();
     void row_shift_exec(uint32_t sequence);
 
     void send_clocks(uint count, bool lat = false);
