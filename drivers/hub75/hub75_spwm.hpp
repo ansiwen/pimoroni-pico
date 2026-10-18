@@ -184,7 +184,8 @@ class Hub75SPWM {
     // (the chips' PWM clock) always run at the same speed, so dark colours don't
     // flicker. The clock is the system clock / (6 * div). The default is the
     // smallest integer divider that keeps it at or below 12.5MHz: 2 at 150MHz,
-    // ~5ms per 128x64 frame. 1 gives 25MHz (~2.6ms per frame), which can cause
+    // ~5ms per 128x64 frame (for the FM6373 25MHz: 1, ~5.2ms with
+    // Lanes::SINGLE). 1 gives 25MHz (~2.6ms per frame), which can cause
     // noise on some panels; an upload must also stay slower than update()
     // converts (~1.9ms for 128x64), see torn_frames. Applied from the next frame.
     // For testing, a divider below 1 (down to 1/3) only makes DCLK faster: the

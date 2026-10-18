@@ -219,7 +219,7 @@ mp_obj_t Hub75SPWM_set_avoid_tearing(mp_obj_t self_in, mp_obj_t avoid_in) {
     return mp_const_none;
 }
 
-// set_clock_div(div): CLK = system clock / (6 * div), eg. 2 = 12.5MHz (default), 1 = 25MHz at 150MHz
+// set_clock_div(div): CLK = system clock / (6 * div), eg. 2 = 12.5MHz (default), 1 = 25MHz (default for the FM6373) at 150MHz
 mp_obj_t Hub75SPWM_set_clock_div(mp_obj_t self_in, mp_obj_t div_in) {
     _Hub75SPWM_obj_t *self = MP_OBJ_TO_PTR2(self_in, _Hub75SPWM_obj_t);
     mp_float_t div = mp_obj_get_float(div_in);

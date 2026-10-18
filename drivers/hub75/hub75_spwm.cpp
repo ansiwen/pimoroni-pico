@@ -24,6 +24,9 @@ static const uint MAX_CLK_MHZ = 15;
 // kHz, as in DMD_STM32. A P2.5 SM16380SH panel showed noise at 25MHz with a
 // bright profile, and dark pixels flickered if the two clocks differed.
 static const uint MAX_CLOCK_KHZ = 12500;
+// For the FM6373: stable at 25MHz on a P2.5 128x64 1/64 FM6373D panel, which
+// halves its upload time (~5.2ms instead of ~10.5ms)
+static const uint MAX_CLOCK_KHZ_FM6373 = 25000;
 
 
 // The driver that the DMA IRQ handler belongs to (only one instance is supported)
@@ -277,9 +280,11 @@ void Hub75SPWM::start() {
     // Integer dividers keep the CLK below MAX_CLK_MHZ (frame/regs SMs: 6 cycles per clock, clk_lat: 2)
     uint data_clkdiv = 1 + cycles_per_us / (MAX_CLK_MHZ * 5);
     if(clock_div == 0) {
-        // Smallest integer divider, 6 cycles per upload clock: 2 (12.5MHz) at 150MHz
+        // Smallest integer divider, 6 cycles per upload clock: 2 (12.5MHz) at
+        // 150MHz, 1 (25MHz) for the FM6373
         uint clock_khz = clock_get_hz(clk_sys) / 6000;
-        set_clock_div((clock_khz + MAX_CLOCK_KHZ - 1) / MAX_CLOCK_KHZ);
+        uint max_khz = chip == Chip::FM6373 ? MAX_CLOCK_KHZ_FM6373 : MAX_CLOCK_KHZ;
+        set_clock_div((clock_khz + max_khz - 1) / max_khz);
     }
     frame_config = hub75_spwm_frame_program_init(pio, sm_frame, frame_prog_offs, data_clkdiv, pin_r0, pin_clk);
     regs_config = hub75_spwm_regs_program_init(pio, sm_regs, regs_prog_offs, data_clkdiv, pin_r0, pin_lat, pin_clk);

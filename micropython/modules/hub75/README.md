@@ -158,7 +158,7 @@ while True:
 * `set_brightness(0-255)` and `set_colour_depth(1-10)`: take effect with the next `update()`.
 * `set_gclk_bits(12-15)`: the bit position + 1 of the greyscale MSB in the chips' 16-bit words, chip specific: 13 for the SM16380SH and FM6373. If the brightest colours all look the same, the value is too high.
 * `set_avoid_tearing(False)`: never wait for the frame being sent, like `Hub75`. The frame being sent can then show the old image above a line and the new one below it.
-* `set_clock_div(div)`: the speed of the CLK line, used for the frame upload and as the chips' PWM clock: system clock / (6 * div). The default is 2, 12.5MHz at 150MHz, ~5ms per 128x64 frame. 1 gives 25MHz and ~2.6ms per frame, but can cause noise with bright images on some panels.
+* `set_clock_div(div)`: the speed of the CLK line, used for the frame upload and as the chips' PWM clock: system clock / (6 * div). The default is 2, 12.5MHz at 150MHz, ~5ms per 128x64 frame. 1 gives 25MHz and ~2.6ms per frame, but can cause noise with bright images on some panels. For `PANEL_FM6373` the default is 1: stable on a 128x64 1/64 scan FM6373D panel, ~5.2ms per frame.
 * `set_refresh_rate(hz)`: 60Hz by default.
 
 #### Register profiles
