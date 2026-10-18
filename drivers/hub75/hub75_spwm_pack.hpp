@@ -8,7 +8,9 @@ Compact frame buffer format for hub75_spwm_frame (see hub75_spwm.pio).
 Each chip receives one 16-bit greyscale word per channel per scan line, MSB
 first. Only the 10 bits below the leading zeros carry data, so the buffer holds
 just those 10 clocks for each column: two 32-bit words of 5 clocks, 6 bits per
-clock (R0, G0, B0, R1, G1, B1), the first clock in the LSBs.
+clock (R0, G0, B0, R1, G1, B1), the first clock in the LSBs. Panels that only
+use R0, G0, B0 get one word of 10 clocks, 3 bits per clock (the *_single
+functions).
 
 The words are in upload order: for each scan line, for each of the 16 channels,
 for each chip in the chain. Chain position `pos` is channel pos % 16 of chip
@@ -21,23 +23,24 @@ SPDX-License-Identifier: GPL-3.0-or-later
 namespace pimoroni {
 namespace hub75_spwm_pack {
 
-    // Spread a 5-bit value over 5 clocks, MSB first, one bit every 6 bits
-    constexpr uint32_t spread5(uint32_t v) {
+    // Spread a 5-bit value over 5 clocks, MSB first, one bit every `stride` bits
+    constexpr uint32_t spread5(uint32_t v, uint32_t stride = 6) {
         uint32_t s = 0;
         for(int i = 0; i < 5; i++) {
-            if(v & (0b10000 >> i)) s |= 1u << (6 * i);
+            if(v & (0b10000 >> i)) s |= 1u << (stride * i);
         }
         return s;
     }
 
     struct Spread5Table {
         uint32_t t[32];
-        constexpr Spread5Table() : t() {
-            for(auto v = 0u; v < 32; v++) t[v] = spread5(v);
+        constexpr Spread5Table(uint32_t stride) : t() {
+            for(auto v = 0u; v < 32; v++) t[v] = spread5(v, stride);
         }
     };
 
-    constexpr Spread5Table SPREAD5;
+    constexpr Spread5Table SPREAD5(6);
+    constexpr Spread5Table SPREAD5_SINGLE(3);
 
     // Bit 0 of every clock
     constexpr uint32_t CLOCK_BITS = spread5(0b11111);
@@ -67,6 +70,21 @@ namespace hub75_spwm_pack {
         w[0] = w0;
         w[1] = w1;
         return changed;
+    }
+
+    // Index of the word for chain position `pos` of scan line `line`, with only
+    // R0, G0, B0
+    constexpr uint32_t word_index_single(uint32_t pos, uint32_t line, uint32_t chain) {
+        return word_index(pos, line, chain) / 2;
+    }
+
+    // Write the 10-bit greyscale values of a pixel with only R0, G0, B0
+    inline void set_single(uint32_t *buffer, uint32_t pos, uint32_t line, uint32_t chain,
+                           uint32_t r, uint32_t g, uint32_t b) {
+        const uint32_t *t = SPREAD5_SINGLE.t;
+        buffer[word_index_single(pos, line, chain)] =
+            t[r >> 5] | t[g >> 5] << 1 | t[b >> 5] << 2 |
+            (t[r & 31] | t[g & 31] << 1 | t[b & 31] << 2) << 15;
     }
 
     // Write the 10-bit greyscale values of both lanes at chain position `pos`

@@ -43,10 +43,12 @@ static const uint16_t ICND2055_CONFIG[] = {
     0x1a1f, 0x1b10, 0x1ccf, 0x1d0a, 0x1e4c, 0x1f20, 0x2008, 0x2101, 0x221c
 };
 
-static const uint16_t FM6373_CONFIG[] = {
-    0x021f, 0x033f, 0x0402, 0x0507, 0x0603, 0x0720, 0x0820, 0x0900, 0x0a00, 0x0b00,
-    0x0c01, 0x0d01, 0x0e04, 0x0f01, 0x10c2, 0x1121, 0x1201, 0x17f0, 0x181f, 0x1900,
-    0x1a1f, 0x1b10, 0x1cc1, 0x1d0a, 0x1e42, 0x1f04, 0x2008, 0x2101, 0x221c
+// DMD_STM32 register_test profile REG 6, "P2.5 - FM6373 - TC7559KB - 1/64", the only
+// one without ghosting on a P2.5 128x64 1/64 scan panel with FM6373D and 6258K
+static const uint16_t FM6373_CONFIG[3][47] = {
+    {HUB75_SPWM_FM6373_REG6_RED},
+    {HUB75_SPWM_FM6373_REG6_GREEN},
+    {HUB75_SPWM_FM6373_REG6_BLUE}
 };
 
 Hub75SPWM::Hub75SPWM(uint width, uint height, Chip chip, uint32_t *buffer, Hub75::COLOR_ORDER color_order)
@@ -105,7 +107,7 @@ void Hub75SPWM::load_chip_defaults() {
             // DMD_STM32 uses 14, but on a P2.5 128x64 FM6373D panel the
             // brightest values all looked the same, as with the SM16380SH
             gclk_bits = 13;
-            set_config_registers(FM6373_CONFIG, count_of(FM6373_CONFIG));
+            set_config_registers(FM6373_CONFIG[0], FM6373_CONFIG[1], FM6373_CONFIG[2], count_of(FM6373_CONFIG[0]));
             break;
     }
 }
@@ -114,7 +116,7 @@ bool Hub75SPWM::set_lanes(Lanes lanes) {
     if(running) return false;
     uint new_lines = lanes == Lanes::HALVES ? height / 2 : height;
     uint new_chain = lanes == Lanes::LEFT_RIGHT ? width / 2 : width;
-    uint words = new_lines * new_chain * 2;
+    uint words = new_lines * new_chain * (lanes == Lanes::SINGLE ? 1 : 2);
     if(words > buffer_words) {
         if(!managed_buffer) return false;
         delete[] frame_buffer;
@@ -193,16 +195,18 @@ void Hub75SPWM::set_pixel(uint x, uint y, uint8_t r, uint8_t g, uint8_t b) {
     if(x >= width || y >= height) return;
     uint pos, line, lane;
     map_pixel(x, y, pos, line, lane);
-    uint32_t c = r << 16 | g << 8 | b;
-    hub75_spwm_pack::set(frame_buffer, pos, line, lane, chain,
-        greyscale(c >> pin_shift[0]), greyscale(c >> pin_shift[1]), greyscale(c >> pin_shift[2]));
+    set_chain_pixel(line, pos, lane, r, g, b);
 }
 
 void Hub75SPWM::set_chain_pixel(uint line, uint pos, uint lane, uint8_t r, uint8_t g, uint8_t b) {
     if(line >= scan_lines || pos >= chain || lane > 1) return;
     uint32_t c = r << 16 | g << 8 | b;
-    hub75_spwm_pack::set(frame_buffer, pos, line, lane, chain,
-        greyscale(c >> pin_shift[0]), greyscale(c >> pin_shift[1]), greyscale(c >> pin_shift[2]));
+    uint32_t vr = greyscale(c >> pin_shift[0]), vg = greyscale(c >> pin_shift[1]), vb = greyscale(c >> pin_shift[2]);
+    if(lanes == Lanes::SINGLE) {
+        if(lane == 0) hub75_spwm_pack::set_single(frame_buffer, pos, line, chain, vr, vg, vb);
+    } else {
+        hub75_spwm_pack::set(frame_buffer, pos, line, lane, chain, vr, vg, vb);
+    }
 }
 
 void Hub75SPWM::clear() {
@@ -284,6 +288,7 @@ void Hub75SPWM::start() {
         clk_lat_clkdiv, pin_lat, pin_clk);
     clk_cnt_config = hub75_spwm_clk_cnt_program_init(pio_gclk, sm_clk_cnt, clk_cnt_prog_offs,
         1, pin_clk, pin_oe);
+    hub75_spwm_frame_set_lanes(pio, frame_prog_offs, &frame_config, pin_r0, lanes == Lanes::SINGLE ? 1 : 2);
     rows_config = hub75_spwm_rows_program_init(pio_gclk, sm_rows, rows_prog_offs, pin_row_a, shift);
     rows_shift_initialised = false;
     pio_sm_set_enabled(pio, sm_clk_lat, true);
@@ -480,9 +485,14 @@ void Hub75SPWM::init_mux() {
 void Hub75SPWM::start_gclk() {
     pio_sm_init(pio_gclk, sm_clk_cnt, clk_cnt_prog_offs, &clk_cnt_config);
 
-    // Clocks - 1 of the three segments (OE low, high, low), 8 bits each
+    // Clocks - 1 of the three segments (OE low, high, low), 8 bits each.
+    // Shift register row drivers need more time to switch (DMD_STM32).
+    bool shift = row_driver == RowDriver::SHIFT_REGISTER;
+    uint d1 = gclk_d1 ? gclk_d1 : (shift ? 38 : 28);
+    uint d2 = gclk_d2 ? gclk_d2 : 4;
+    uint d3 = gclk_d3 ? gclk_d3 : (shift ? 86 : 96);
     auto segment = [](uint clocks) { return std::clamp(clocks, 1u, 256u) - 1; };
-    uint32_t control = segment(gclk_d3) << 16 | segment(gclk_d2) << 8 | segment(gclk_d1);
+    uint32_t control = segment(d3) << 16 | segment(d2) << 8 | segment(d1);
     pio_sm_put(pio_gclk, sm_clk_cnt, control);
     pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_pull(false, true));
     pio_sm_exec(pio_gclk, sm_clk_cnt, pio_encode_mov(pio_isr, pio_osr)); // Keep a copy
@@ -630,7 +640,7 @@ void __not_in_flash_func(Hub75SPWM::start_dclk)() {
 uint Hub75SPWM::upload_line() {
     if(state != State::UPLOADING) return scan_lines;
     uint32_t read = (uint32_t)dma_channel_hw_addr(dma_channel)->read_addr - (uint32_t)frame_buffer;
-    return read / (sizeof(uint32_t) * 2 * chain); // 2 words per chain position
+    return read / (sizeof(uint32_t) * words_per_pixel() * chain);
 }
 
 void Hub75SPWM::set_refresh_rate(uint hz) {
@@ -670,8 +680,12 @@ void Hub75SPWM::update(PicoGraphics *graphics, uint sync) {
                 if(y < height) {
                     uint pos, line, lane;
                     map_pixel(x, y, pos, line, lane);
-                    hub75_spwm_pack::set(frame_buffer, pos, line, lane, chain,
-                        lut[(c >> s0) & 0xff], lut[(c >> s1) & 0xff], lut[(c >> s2) & 0xff]);
+                    uint32_t vr = lut[(c >> s0) & 0xff], vg = lut[(c >> s1) & 0xff], vb = lut[(c >> s2) & 0xff];
+                    if(lanes == Lanes::SINGLE) {
+                        hub75_spwm_pack::set_single(frame_buffer, pos, line, chain, vr, vg, vb);
+                    } else {
+                        hub75_spwm_pack::set(frame_buffer, pos, line, lane, chain, vr, vg, vb);
+                    }
                 }
                 offset++;
             }
@@ -700,16 +714,22 @@ void Hub75SPWM::update(PicoGraphics *graphics, uint sync) {
             while(frame_number == frame && upload_line() <= line) tight_loop_contents();
             wait += absolute_time_diff_us(wait_start, get_absolute_time());
         }
-        // The pixels both lanes send in this scan line, see Lanes
+        // The pixels the lanes send in this scan line, see Lanes
         const uint32_t *lane0 = &src[line * width];
-        const uint32_t *lane1 = nullptr;
-        if(lanes == Lanes::HALVES) lane1 = &src[(line + scan_lines) * width];
-        if(lanes == Lanes::LEFT_RIGHT) lane1 = lane0 + chain;
-        for(auto pos = 0u; pos < chain; pos++) {
-            uint32_t c0 = lane0[pos], c1 = lane1 ? lane1[pos] : 0;
-            hub75_spwm_pack::set_pair(frame_buffer, pos, line, chain,
-                lut[(c0 >> s0) & 0xff], lut[(c0 >> s1) & 0xff], lut[(c0 >> s2) & 0xff],
-                lut[(c1 >> s0) & 0xff], lut[(c1 >> s1) & 0xff], lut[(c1 >> s2) & 0xff]);
+        if(lanes == Lanes::SINGLE) {
+            for(auto pos = 0u; pos < chain; pos++) {
+                uint32_t c0 = lane0[pos];
+                hub75_spwm_pack::set_single(frame_buffer, pos, line, chain,
+                    lut[(c0 >> s0) & 0xff], lut[(c0 >> s1) & 0xff], lut[(c0 >> s2) & 0xff]);
+            }
+        } else {
+            const uint32_t *lane1 = lanes == Lanes::HALVES ? &src[(line + scan_lines) * width] : lane0 + chain;
+            for(auto pos = 0u; pos < chain; pos++) {
+                uint32_t c0 = lane0[pos], c1 = lane1[pos];
+                hub75_spwm_pack::set_pair(frame_buffer, pos, line, chain,
+                    lut[(c0 >> s0) & 0xff], lut[(c0 >> s1) & 0xff], lut[(c0 >> s2) & 0xff],
+                    lut[(c1 >> s0) & 0xff], lut[(c1 >> s1) & 0xff], lut[(c1 >> s2) & 0xff]);
+            }
         }
         // An upload that started meanwhile has read (part of) this line before
         // it was written. Conservative: it may have read the line just after.

@@ -33,6 +33,10 @@ Supported chips (all use the "decoupled" DCLK/GCLK scheme):
  - ICND2055
  - FM6373
 
+Panels that don't have two halves at 1/32 scan, or use a shift register as row
+driver, need `lanes` and `row_driver`, eg. a 128x64 1/64 scan FM6373 panel:
+Lanes::SINGLE and RowDriver::SHIFT_REGISTER.
+
 SPDX-License-Identifier: GPL-3.0-or-later
 */
 
@@ -52,7 +56,7 @@ class Hub75SPWM {
         // R0, G0, B0 the top half, R1, G1, B1 the bottom half, eg. 1/32 scan on
         // 64 rows: height / 2 scan lines, chain = width
         HALVES,
-        // Only R0, G0, B0: height scan lines, chain = width. Uses twice the RAM.
+        // Only R0, G0, B0: height scan lines, chain = width
         SINGLE,
         // R0, G0, B0 the left half, R1, G1, B1 the right half: height scan
         // lines, chain = width / 2
@@ -93,10 +97,12 @@ class Hub75SPWM {
     uint row_shift_data = 2;
     bool row_shift_data_inverted = false;  // the selected row is shifted in as 0
 
-    // CLKs per scan line with OE (GCLK) low, high, low, applied from the next frame
-    uint gclk_d1 = 28;
-    uint gclk_d2 = 4;
-    uint gclk_d3 = 96;
+    // CLKs per scan line with OE (GCLK) low, high, low, applied from the next
+    // frame. 0 for DMD_STM32's: 28, 4, 96, or 38, 4, 86 for SHIFT_REGISTER,
+    // which gives the row driver more time to switch.
+    uint gclk_d1 = 0;
+    uint gclk_d2 = 0;
+    uint gclk_d3 = 0;
 
     // Interstate 75 (W) pinout
     uint pin_r0 = 0;      // R0, G0, B0, R1, G1, B1 must be consecutive
@@ -134,9 +140,8 @@ class Hub75SPWM {
     void set_gclk_bits(uint bits);
     uint get_gclk_bits() const { return gclk_bits; }
 
-    // Size of the frame buffer in 32-bit words: width * height for HALVES and
-    // LEFT_RIGHT, the same RAM as Hub75, twice that for SINGLE
-    uint buffer_size() const { return scan_lines * chain * 2; }
+    // Size of the frame buffer in 32-bit words: width * height, the same RAM as Hub75
+    uint buffer_size() const { return scan_lines * chain * words_per_pixel(); }
 
     // Brightness and colour depth are applied when a pixel is set.
     // Writes straight to the frame buffer, use update() to avoid tearing.
@@ -266,6 +271,8 @@ class Hub75SPWM {
     void finish_frame();
     uint32_t greyscale(uint8_t v);
     void map_pixel(uint x, uint y, uint &pos, uint &line, uint &lane) const;
+    // Frame buffer words per chain position: 1 with only R0, G0, B0
+    uint words_per_pixel() const { return lanes == Lanes::SINGLE ? 1 : 2; }
     uint32_t row_shift_sequence(bool data) const;
     void row_shift_exec(uint32_t sequence);
 

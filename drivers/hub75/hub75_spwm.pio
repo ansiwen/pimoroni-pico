@@ -11,12 +11,14 @@
 .side_set 2
 
 ; side-set pins are CLK (bit 0) and LAT (bit 1)
-; OUT pins are R0, G0, B0, R1, G1, B1
+; OUT pins are R0, G0, B0, R1, G1, B1, or only R0, G0, B0 for panels that only
+; use those (Hub75SPWM::Lanes::SINGLE)
 ;
 ; Clocks out a frame from the compact frame buffer. Every chip receives one
 ; 16-bit word per channel, MSB first, of which only bits 13..4 (with
 ; 14 greyscale bits) carry data. The buffer only holds those 10 clocks, as two
-; 32-bit words of 5 clocks * 6 bits (autopull at 30 bits). This program adds
+; 32-bit words of 5 clocks * 6 bits, or one word of 10 clocks * 3 bits with only
+; R0, G0, B0 (autopull at 30 bits, `out pins` patched to 3). This program adds
 ; the 2 leading and 4 trailing zero clocks, and raises LAT on the last clock of
 ; the last chip in the chain (a data latch).
 ;
@@ -37,8 +39,8 @@ lead:
     nop                 side 0b01 [1]
     jmp x-- lead        side 0b00 [2]
     set x, 9            side 0b00       ; 10 data clocks
-data:
-    out pins, 6         side 0b00
+public data:
+    out pins, 6         side 0b00       ; 3 with only R0, G0, B0
     nop                 side 0b01 [1]
     jmp x-- data        side 0b00 [2]
     mov pins, null      side 0b00
@@ -225,6 +227,13 @@ static inline pio_sm_config hub75_spwm_frame_program_init(PIO pio, uint sm, uint
 static inline void hub75_spwm_frame_set_zeros(PIO pio, uint offset, uint lead, uint trail) {
     pio->instr_mem[offset + hub75_spwm_frame_offset_lead_count] = pio_encode_set(pio_x, lead - 1);
     pio->instr_mem[offset + hub75_spwm_frame_offset_trail_count] = pio_encode_set(pio_x, trail - 2);
+}
+
+// Send 6 bits per clock (R0, G0, B0, R1, G1, B1, 2 words per channel) or 3 (R0,
+// G0, B0, 1 word per channel). Only while the SM is stopped.
+static inline void hub75_spwm_frame_set_lanes(PIO pio, uint offset, pio_sm_config *c, uint rgb_base_pin, uint lanes) {
+    pio->instr_mem[offset + hub75_spwm_frame_offset_data] = pio_encode_out(pio_pins, 3 * lanes);
+    sm_config_set_out_pins(c, rgb_base_pin, 3 * lanes);
 }
 
 static inline pio_sm_config hub75_spwm_regs_program_init(PIO pio, uint sm, uint offset, float clkdiv, uint rgb_base_pin, uint lat_pin, uint clk_pin) {

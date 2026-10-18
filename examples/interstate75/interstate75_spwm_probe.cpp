@@ -142,8 +142,10 @@ void print_status() {
   }
   float sys_mhz = clock_get_hz(clk_sys) / 1e6f;
   float div = hub75.get_clock_div();
-  printf("profile %s, gclk_bits %u, GCLK %u/%u/%u, brightness %u\n",
-    FM6373_PROFILES[profile].name, hub75.get_gclk_bits(), hub75.gclk_d1, hub75.gclk_d2, hub75.gclk_d3, hub75.brightness);
+  printf("profile %s, gclk_bits %u, ", FM6373_PROFILES[profile].name, hub75.get_gclk_bits());
+  if(hub75.gclk_d1) printf("GCLK %u/%u/%u", hub75.gclk_d1, hub75.gclk_d2, hub75.gclk_d3);
+  else printf("GCLK automatic");
+  printf(", brightness %u\n", hub75.brightness);
   printf("system clock %.0fMHz, clock div %.3f: upload %.2fMHz, DCLK %.2fMHz\n",
     sys_mhz, div, sys_mhz / (6 * (div < 1 ? 1 : div)), sys_mhz / (6 * div));
 }
@@ -166,7 +168,8 @@ void print_help() {
     "  m CLK LAT DATA shift register pins, eg. m a b c, m a - c (no latch)\n"
     "  i              invert the shift register data\n"
     "  g N            gclk_bits 12-15 (position + 1 of the greyscale MSB)\n"
-    "  t D1 D2 D3     CLKs per scan line with OE low, high, low (28 4 96, shift register 38 4 86)\n"
+    "  t D1 D2 D3     CLKs per scan line with OE low, high, low, 0 0 0: automatic\n"
+    "                 (28 4 96, shift register 38 4 86)\n"
     "  d N            clock divider: system clock / (6 * N), eg. d 2. Below 1, eg. d 2/3,\n"
     "                 only DCLK gets faster (down to 1/3), the upload stays at d 1\n"
     "  F N            system clock in MHz, 150-200 (overclocking above 150)\n"
@@ -211,13 +214,9 @@ void print_work() {
   }
 }
 
-// DMD_STM32's CLKs per scan line with OE low, high, low: shift register row
-// drivers get more time to switch
-void set_default_gclk(Hub75SPWM::RowDriver rows) {
-  bool shift = rows == Hub75SPWM::RowDriver::SHIFT_REGISTER;
-  hub75.gclk_d1 = shift ? 38 : 28;
-  hub75.gclk_d2 = 4;
-  hub75.gclk_d3 = shift ? 86 : 96;
+// The driver's GCLK timing for the row driver (DMD_STM32's)
+void set_default_gclk(Hub75SPWM::RowDriver) {
+  hub75.gclk_d1 = hub75.gclk_d2 = hub75.gclk_d3 = 0;
 }
 
 // Lanes and row driver are applied by start()
@@ -421,8 +420,9 @@ void command(char *line) {
     case 'g': hub75.set_gclk_bits(n); break;
     case 't': {
       unsigned d1, d2, d3;
-      if(sscanf(args, "%u %u %u", &d1, &d2, &d3) != 3 || !d1 || !d2 || !d3 || d1 > 256 || d2 > 256 || d3 > 256) {
-        printf("t D1 D2 D3, 1-256 each, eg. t 28 4 96\n"); return;
+      bool automatic = sscanf(args, "%u %u %u", &d1, &d2, &d3) == 3 && !d1 && !d2 && !d3;
+      if(!automatic && (sscanf(args, "%u %u %u", &d1, &d2, &d3) != 3 || !d1 || !d2 || !d3 || d1 > 256 || d2 > 256 || d3 > 256)) {
+        printf("t D1 D2 D3, 1-256 each, eg. t 28 4 96, or t 0 0 0 for automatic\n"); return;
       }
       hub75.gclk_d1 = d1; hub75.gclk_d2 = d2; hub75.gclk_d3 = d3;
       break;
