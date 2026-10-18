@@ -609,8 +609,8 @@ int main() {
 
     if(absolute_time_diff_us(next_print, get_absolute_time()) >= 0) {
       next_print = delayed_by_ms(next_print, 5000);
-      printf("upload %luus, update convert %luus, frame start %luus, torn %lu\n",
-        hub75.upload_us, hub75.update_convert_us, hub75.frame_start_us, hub75.torn_frames);
+      printf("upload %luus, update convert %luus, frame start %luus, torn %lu, late stops %lu\n",
+        hub75.upload_us, hub75.update_convert_us, hub75.frame_start_us, hub75.torn_frames, hub75.stop_gclk_late);
     }
   }
 }

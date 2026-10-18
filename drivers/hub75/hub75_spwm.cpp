@@ -524,17 +524,30 @@ void Hub75SPWM::start_gclk() {
     gclk_running = true;
 }
 
-void Hub75SPWM::stop_gclk() {
+// In RAM: a flash cache miss here can take longer than the first segment of a
+// scan line, eg. after USB serial output
+void __not_in_flash_func(Hub75SPWM::stop_gclk)() {
     if(gclk_running) {
         // Stop DCLK and GCLK as soon as the rows SM selects row 0 (IRQ 1), the
-        // start of the frame. Interrupts are disabled so nothing delays this, it
-        // takes at most one frame of scan lines (~330us for 32 rows at 12.5MHz).
+        // start of the frame, before that row's OE pulse: an extra pulse moves
+        // the chips' row counter on, and the picture by one row. Interrupts are
+        // disabled so nothing delays this, it takes at most one frame of scan
+        // lines (~330us for 32 rows at 12.5MHz). If clk_cnt still got past its
+        // first segment, let it run on to the next row 0.
         // A frame is at most 64 rows * 768 clocks, this should never time out.
         uint32_t status = save_and_disable_interrupts();
         absolute_time_t timeout = make_timeout_time_ms(100);
-        pio_interrupt_clear(pio_gclk, 1);
-        while(!pio_interrupt_get(pio_gclk, 1) && !time_reached(timeout)) {}
-        pio_sm_set_enabled(pio_gclk, sm_clk_cnt, false);
+        while(true) {
+            pio_interrupt_clear(pio_gclk, 1);
+            while(!pio_interrupt_get(pio_gclk, 1) && !time_reached(timeout)) {}
+            pio_sm_set_enabled(pio_gclk, sm_clk_cnt, false);
+            // Up to and including `set x ... side 1` (not executed yet), OE is low
+            uint pc = pio_sm_get_pc(pio_gclk, sm_clk_cnt) - clk_cnt_prog_offs;
+            bool in_time = pc <= hub75_spwm_clk_cnt_offset_w4 && !gpio_get(pin_oe);
+            if(in_time || time_reached(timeout)) break;
+            stop_gclk_late++;
+            pio_sm_set_enabled(pio_gclk, sm_clk_cnt, true);
+        }
         pio_sm_set_enabled(pio, sm_clk_lat, false);
         restore_interrupts(status);
         gclk_running = false;

@@ -212,6 +212,9 @@ class Hub75SPWM {
     // stay 0, otherwise raise the upload clock divider. Doesn't count the tears
     // that avoid_tearing = false allows.
     volatile uint32_t torn_frames = 0;
+    // Frame starts where stopping the clocks at row 0 came too late, and they
+    // ran on to the next row 0 instead (~0.3ms for 64 rows)
+    volatile uint32_t stop_gclk_late = 0;
     uint32_t update_wait_us = 0;
     uint32_t update_convert_us = 0;
 
