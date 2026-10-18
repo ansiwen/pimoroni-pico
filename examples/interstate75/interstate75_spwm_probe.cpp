@@ -41,6 +41,9 @@ Patterns:
     of every line white.
  5. Gradients: one red, green, blue and white ramp per quarter.
  6. Scrolling text.
+ 7. Refresh test: the top half alternates between white and black with every
+    refresh (update() with sync 1), so it looks evenly grey only if the panel
+    shows every frame. The bottom half has red, green, blue and white ramps.
 
 Button A short press: next pattern
 Button A long press:  next preset (lanes and row driver), see PRESETS
@@ -107,7 +110,7 @@ const Preset PRESETS[] = {
   {Hub75SPWM::Lanes::HALVES, Hub75SPWM::RowDriver::DECODER},
 };
 
-const uint PATTERN_COUNT = 7;
+const uint PATTERN_COUNT = 8;
 const uint PROFILE_COUNT = count_of(FM6373_PROFILES);
 
 uint pattern = 0;
@@ -268,6 +271,28 @@ void draw_gradients() {
     graphics.rectangle(Rect(x, band * 2, 1, band));
     graphics.set_pen(v, v, v);
     graphics.rectangle(Rect(x, band * 3, 1, band));
+  }
+}
+
+// Pattern 7: the top half white on odd frames, black on even ones, ramps below
+void draw_refresh_test(bool white) {
+  int w = graphics.bounds.w;
+  int half = graphics.bounds.h / 2;
+  int band = half / 4;
+  if(white) {
+    graphics.set_pen(255, 255, 255);
+    graphics.rectangle(Rect(0, 0, w, half));
+  }
+  for(int x = 0; x < w; x++) {
+    uint8_t v = x * 255 / (w - 1);
+    graphics.set_pen(v, 0, 0);
+    graphics.rectangle(Rect(x, half, 1, band));
+    graphics.set_pen(0, v, 0);
+    graphics.rectangle(Rect(x, half + band, 1, band));
+    graphics.set_pen(0, 0, v);
+    graphics.rectangle(Rect(x, half + band * 2, 1, band));
+    graphics.set_pen(v, v, v);
+    graphics.rectangle(Rect(x, half + band * 3, 1, band));
   }
 }
 
@@ -554,6 +579,7 @@ int main() {
         case 0: draw_orientation(); break;
         case 5: draw_gradients(); break;
         case 6: draw_scroller(offset++); break;
+        case 7: draw_refresh_test(offset++ & 1); break;
       }
 
       if(now < overlay_until) {
@@ -565,12 +591,17 @@ int main() {
         graphics.text(label, Point(1, 1), -1, 1);
       }
 
-      next_frame = delayed_by_us(next_frame, 1000000 / 30);
-      if(absolute_time_diff_us(get_absolute_time(), next_frame) < 0) {
-        next_frame = get_absolute_time();
+      if(pattern == 7) {
+        // A new image for every refresh
+        hub75.update(&graphics, 1);
+      } else {
+        next_frame = delayed_by_us(next_frame, 1000000 / 30);
+        if(absolute_time_diff_us(get_absolute_time(), next_frame) < 0) {
+          next_frame = get_absolute_time();
+        }
+        sleep_until(next_frame);
+        hub75.update(&graphics);
       }
-      sleep_until(next_frame);
-      hub75.update(&graphics);
     }
 
     if(absolute_time_diff_us(next_print, get_absolute_time()) >= 0) {
