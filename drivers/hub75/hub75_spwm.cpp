@@ -563,7 +563,7 @@ int64_t Hub75SPWM::start_frame() {
     pio_sm_set_enabled(pio, sm_frame, false);
     // The greyscale bits below the leading zeros are sent from the frame buffer
     hub75_spwm_frame_set_zeros(pio, frame_prog_offs, 16 - gclk_bits, gclk_bits - 10);
-    sm_config_set_clkdiv(&frame_config, clock_div);
+    sm_config_set_clkdiv(&frame_config, std::max((float)clock_div, 1.0f));
     pio_sm_init(pio, sm_frame, frame_prog_offs, &frame_config);
     pio_sm_put(pio, sm_frame, chain / CHANNELS_PER_CHIP - 1);
     pio_sm_exec(pio, sm_frame, pio_encode_pull(false, true));
@@ -607,6 +607,8 @@ void __not_in_flash_func(Hub75SPWM::finish_frame)() {
 }
 
 void Hub75SPWM::set_clock_div(float div) {
+    // Below 1, only DCLK gets faster (2 PIO cycles per clock, up to div 1/3)
+    div = std::max(div, 1.0f / 3);
     // The free-running DCLK takes 2 PIO cycles per clock, the upload 6
     uint32_t div_int;
     uint8_t div_frac8;

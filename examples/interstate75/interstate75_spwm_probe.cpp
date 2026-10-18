@@ -2,6 +2,8 @@
 #include <cstring>
 #include <cstdlib>
 #include "pico/stdlib.h"
+#include "hardware/clocks.h"
+#include "hardware/vreg.h"
 
 #include "libraries/pico_graphics/pico_graphics.hpp"
 #include "libraries/interstate75/interstate75.hpp"
@@ -138,9 +140,12 @@ void print_status() {
   } else {
     printf("rows DECODER (A-E)\n");
   }
-  printf("profile %s, gclk_bits %u, GCLK %u/%u/%u, clock div %.2f, brightness %u\n",
-    FM6373_PROFILES[profile].name, hub75.get_gclk_bits(), hub75.gclk_d1, hub75.gclk_d2, hub75.gclk_d3,
-    hub75.get_clock_div(), hub75.brightness);
+  float sys_mhz = clock_get_hz(clk_sys) / 1e6f;
+  float div = hub75.get_clock_div();
+  printf("profile %s, gclk_bits %u, GCLK %u/%u/%u, brightness %u\n",
+    FM6373_PROFILES[profile].name, hub75.get_gclk_bits(), hub75.gclk_d1, hub75.gclk_d2, hub75.gclk_d3, hub75.brightness);
+  printf("system clock %.0fMHz, clock div %.3f: upload %.2fMHz, DCLK %.2fMHz\n",
+    sys_mhz, div, sys_mhz / (6 * (div < 1 ? 1 : div)), sys_mhz / (6 * div));
 }
 
 void print_help() {
@@ -162,7 +167,9 @@ void print_help() {
     "  i              invert the shift register data\n"
     "  g N            gclk_bits 12-15 (position + 1 of the greyscale MSB)\n"
     "  t D1 D2 D3     CLKs per scan line with OE low, high, low (28 4 96, shift register 38 4 86)\n"
-    "  d N            clock divider: system clock / (6 * N)\n"
+    "  d N            clock divider: system clock / (6 * N), eg. d 2. Below 1, eg. d 2/3,\n"
+    "                 only DCLK gets faster (down to 1/3), the upload stays at d 1\n"
+    "  F N            system clock in MHz, 150-200 (overclocking above 150)\n"
     "  b N            brightness 0-255\n"
     "  f N            refresh rate in Hz\n",
     PATTERN_COUNT - 1, PROFILE_COUNT - 1);
@@ -420,7 +427,25 @@ void command(char *line) {
       hub75.gclk_d1 = d1; hub75.gclk_d2 = d2; hub75.gclk_d3 = d3;
       break;
     }
-    case 'd': if(n >= 1 && n <= 16) hub75.set_clock_div(n); break;
+    case 'd': {
+      float num = 0, den = 1;
+      if(sscanf(args, "%f/%f", &num, &den) < 1 || den <= 0 || num / den < 1.0f / 3 - 0.001f || num / den > 16) {
+        printf("d N, 1/3 to 16, eg. d 2 or d 2/3\n"); return;
+      }
+      hub75.set_clock_div(num / den);
+      break;
+    }
+    case 'F': {
+      if(n < 150 || n > 200) { printf("F N, 150-200 MHz\n"); return; }
+      hub75.stop();
+      // A little more core voltage for overclocking, well within the RP2350's range
+      vreg_set_voltage(n > 150 ? VREG_VOLTAGE_1_15 : VREG_VOLTAGE_DEFAULT);
+      sleep_ms(1);
+      if(!set_sys_clock_khz(n * 1000, false)) printf("can't set %ld MHz\n", n);
+      hub75.start();
+      raw_dirty = true;
+      break;
+    }
     case 'b': hub75.brightness = n; break;
     case 'f': if(n >= 10 && n <= 200) hub75.set_refresh_rate(n); break;
     default: printf("unknown command, h for help\n"); return;

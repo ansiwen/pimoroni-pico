@@ -182,6 +182,9 @@ class Hub75SPWM {
     // ~5ms per 128x64 frame. 1 gives 25MHz (~2.6ms per frame), which can cause
     // noise on some panels; an upload must also stay slower than update()
     // converts (~1.9ms for 128x64), see torn_frames. Applied from the next frame.
+    // For testing, a divider below 1 (down to 1/3) only makes DCLK faster: the
+    // upload stays at div 1, so the clocks differ, which can make dark colours
+    // flicker.
     // Commands (VSYNC, latches, registers) always keep their own speed.
     void set_clock_div(float div);
     float get_clock_div() const { return clock_div; }
