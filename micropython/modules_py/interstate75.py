@@ -37,6 +37,12 @@ class Interstate75:
     PANEL_SM16380SH = hub75.PANEL_SM16380SH
     PANEL_ICND2055 = hub75.PANEL_ICND2055
     PANEL_FM6373 = hub75.PANEL_FM6373
+    # Their wiring, if it isn't two halves at 1/32 scan, see hub75.Hub75SPWM
+    LANES_HALVES = hub75.LANES_HALVES
+    LANES_SINGLE = hub75.LANES_SINGLE
+    LANES_LEFT_RIGHT = hub75.LANES_LEFT_RIGHT
+    ROWS_DECODER = hub75.ROWS_DECODER
+    ROWS_SHIFT_REGISTER = hub75.ROWS_SHIFT_REGISTER
     COLOR_ORDER_RGB = hub75.COLOR_ORDER_RGB
     COLOR_ORDER_RBG = hub75.COLOR_ORDER_RBG
     COLOR_ORDER_GRB = hub75.COLOR_ORDER_GRB
@@ -47,7 +53,8 @@ class Interstate75:
     # Count Constants
     NUM_SWITCHES = 2
 
-    def __init__(self, display, panel_type=hub75.PANEL_GENERIC, stb_invert=False, color_order=hub75.COLOR_ORDER_RGB):
+    def __init__(self, display, panel_type=hub75.PANEL_GENERIC, stb_invert=False, color_order=hub75.COLOR_ORDER_RGB,
+                 lanes=hub75.LANES_HALVES, row_driver=hub75.ROWS_DECODER):
         self.interstate75w = "Pico W" in sys.implementation._machine  # noqa: SLF001
         self.display = PicoGraphics(display=display)
         self.width, self.height = self.display.get_bounds()
@@ -61,7 +68,8 @@ class Interstate75:
 
         self.spwm = panel_type in (hub75.PANEL_SM16380SH, hub75.PANEL_ICND2055, hub75.PANEL_FM6373)
         if self.spwm:
-            self.hub75 = hub75.Hub75SPWM(out_width, out_height, panel_type=panel_type, color_order=color_order)
+            self.hub75 = hub75.Hub75SPWM(out_width, out_height, panel_type=panel_type, color_order=color_order,
+                                         lanes=lanes, row_driver=row_driver)
         else:
             self.hub75 = hub75.Hub75(out_width, out_height, panel_type=panel_type, stb_invert=stb_invert, color_order=color_order)
         self.hub75.start()

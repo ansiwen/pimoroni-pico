@@ -103,7 +103,7 @@ Some newer, finer pitch panels use S-PWM driver chips that keep the frame in the
 
 * `PANEL_SM16380SH`
 * `PANEL_ICND2055` (untested)
-* `PANEL_FM6373` (untested)
+* `PANEL_FM6373`
 
 ```python
 import hub75
@@ -118,6 +118,22 @@ matrix.update(graphics)
 ```
 
 The width must be a multiple of 16. `color_order` works as for `Hub75`, and `buffer` can be a `bytearray` of `width * height * 4` bytes, the same as `Hub75`. Only one `Hub75SPWM` can run at a time. It uses 5 PIO state machines in two PIOs, and one DMA channel.
+
+### Panels with other wiring
+
+Most panels drive the top half on R0, G0, B0 and the bottom half on R1, G1, B1, with a binary row address on A-E (1/32 scan for 64 rows). Others need two more keyword arguments:
+
+* `lanes`: which pixels the two sets of data lines drive. `LANES_HALVES` (the default): top and bottom half. `LANES_SINGLE`: only R0, G0, B0, every row is a scan line. `LANES_LEFT_RIGHT`: left and right half, every row is a scan line.
+* `row_driver`: `ROWS_DECODER` (the default) for a binary row address on A-E, up to 32 rows. `ROWS_SHIFT_REGISTER` for row drivers that are shift registers, clocked once per scan line: CLK on A, latch on B, data on C.
+
+For example, a P2.5 128x64 1/64 scan panel with FM6373D drivers and a 6258K row driver:
+
+```python
+matrix = hub75.Hub75SPWM(128, 64, panel_type=hub75.PANEL_FM6373,
+                         lanes=hub75.LANES_SINGLE, row_driver=hub75.ROWS_SHIFT_REGISTER)
+```
+
+The frame buffer is `width * height * 4` bytes with every layout. If the panel stays dark or shows garbage, the `interstate75_spwm_probe` C++ example finds out how it is wired.
 
 `start()` refreshes the panel at a steady 60Hz in the background, and `update(graphics)` converts the image, which takes ~2ms for 128x64. If a frame is being sent, `update()` first waits for the part it converts to be sent, ~5ms at most, so a frame never shows half of an update. `update()` can be called from a thread on the other core, so drawing doesn't hold up the rest of your program.
 
@@ -140,6 +156,7 @@ while True:
 * `set_config_registers(profile)`: replace the chip's configuration registers with a profile that suits your panel. If you see ghost pixels or wrong brightness, try the profiles below. They are sent one per refresh, so all of them are sent within a second. `load_chip_defaults()` restores the built-in ones (`SM16380SH_REG2`).
 * `set_config_registers(red, green, blue)` or `set_config_registers(regs)`: your own register values, as lists, eg. from [DMD_STM32's register_test/profiles](https://github.com/board707/DMD_STM32/tree/dev-V2/register_test/profiles). Each value has the register number in the high byte and its value in the low byte. Most profiles have different values for the chips driving the red, green and blue LEDs; `regs` sends the same values to all of them.
 * `set_brightness(0-255)` and `set_colour_depth(1-10)`: take effect with the next `update()`.
+* `set_gclk_bits(12-15)`: the bit position + 1 of the greyscale MSB in the chips' 16-bit words, chip specific: 13 for the SM16380SH and FM6373. If the brightest colours all look the same, the value is too high.
 * `set_avoid_tearing(False)`: never wait for the frame being sent, like `Hub75`. The frame being sent can then show the old image above a line and the new one below it.
 * `set_clock_div(div)`: the speed of the CLK line, used for the frame upload and as the chips' PWM clock: system clock / (6 * div). The default is 2, 12.5MHz at 150MHz, ~5ms per 128x64 frame. 1 gives 25MHz and ~2.6ms per frame, but can cause noise with bright images on some panels.
 * `set_refresh_rate(hz)`: 60Hz by default.
@@ -165,6 +182,19 @@ matrix.set_config_registers(hub75.SM16380SH_REG8)
 | `SM16380SH_REG34` | P2.5 - SM16380SH - RUC7258D - 1/32 |
 | `SM16380SH_REG43` | P2.5 - SM16380SH - 6158 - 1/32 |
 | `SM16380SH_REG65` | P2.5 - SM16380SH - SM5166PS - 1/32 |
+
+The FM6373 profiles are DMD_STM32's 1/64 scan profiles and the three made for HX6258 row drivers, each a tuple `(red, green, blue)` of 47 register values (41 for `FM6373_REG22`):
+
+| Profile | DMD_STM32 description |
+|---|---|
+| `FM6373_REG2` | preserved former built-in FM6373 CONFIG1 |
+| `FM6373_REG6` | P2.5 - FM6373 - TC7559KB - 1/64 (this driver's default) |
+| `FM6373_REG42`, `_REG59`, `_REG68`, `_REG69`, `_REG70`, `_REG74`, `_REG75`, `_REG76` | P2.5 - FM6373 - DP32020B - 1/64 |
+| `FM6373_REG22` | P3 - FM6373 - HX6258 - 1/13 |
+| `FM6373_REG18` | P2 - FM6373 - HX6258SP - 1/40 |
+| `FM6373_REG13` | P1.86 - FM6373 - HX6258 - 1/43 |
+
+On a P2.5 128x64 1/64 panel with FM6373D drivers and a 6258K row driver, only `FM6373_REG6` doesn't show ghosting.
 
 The chips after the pitch are the panel's row drivers. On a P2.5 128x64 panel with C7262FJ row drivers, `SM16380SH_REG7`, `SM16380SH_REG32` and `SM16380SH_REG34` show ghost pixels, the others don't. `SM16380SH_REG1` is the darkest. `SM16380SH_REG8` is the brightest, but can show noise in large bright areas, most with `set_clock_div(1)`.
 

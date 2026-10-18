@@ -18,11 +18,21 @@ You can identify the chips from the markings on the larger ICs on the back of th
 |-----------|-------------------|---------------------------------------------|
 | SM16380SH | `SM16380SH`       | Being tested on a P2.5 128x64 1/32 scan panel (C7262FJ row driver) |
 | ICND2055  | `ICND2055`        | Ported from DMD_STM32, untested             |
-| FM6373    | `FM6373`          | Ported from DMD_STM32, untested             |
+| FM6373    | `FM6373`          | Tested on a P2.5 128x64 1/64 scan panel (FM6373D, 6258K row driver) |
 
 DMD_STM32 also supports FM6353/ICN2153, FM6363, DP3264 and ICND1065. Those chips use different command sequences and are not ported yet.
 
-The row select lines A-E must drive a binary row decoder. Most modern row driver chips work this way, for example 74HC138, SM5166 and RUC7258. The 7262 (C7262FJ) is probably one too: DMD_STM32 lists it on A-E panels. 595-style shift register row drivers are not supported.
+Most row driver chips are binary decoders on A-E (`RowDriver::DECODER`, up to 32 rows), for example 74HC138, SM5166 and RUC7258. The 7262 (C7262FJ) is probably one too: DMD_STM32 lists it on A-E panels. Others are shift registers clocked once per scan line (`RowDriver::SHIFT_REGISTER`), eg. the 6258 and TC7559, needed for more than 32 scan lines: by default CLK on A, latch on B and data on C (`row_shift_clk`, `row_shift_lat`, `row_shift_data`).
+
+Which pixels the two sets of data lines drive is set with `set_lanes()`: `Lanes::HALVES` (the default: top half on R0, G0, B0, bottom half on R1, G1, B1, height / 2 scan lines), `Lanes::SINGLE` (only R0, G0, B0, height scan lines) or `Lanes::LEFT_RIGHT`. The frame buffer is `width * height` words with each of them. A 128x64 1/64 scan FM6373 panel needs:
+
+```c++
+hub75.row_driver = Hub75SPWM::RowDriver::SHIFT_REGISTER;
+hub75.set_lanes(Hub75SPWM::Lanes::SINGLE);
+hub75.start();
+```
+
+For an unknown panel, `examples/interstate75/interstate75_spwm_probe.cpp` shows which pixels each data line, scan line and chain position drive.
 
 ## Usage
 

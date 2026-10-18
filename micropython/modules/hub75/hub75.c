@@ -56,6 +56,7 @@ MP_DEFINE_CONST_FUN_OBJ_2(Hub75SPWM_set_avoid_tearing_obj, Hub75SPWM_set_avoid_t
 MP_DEFINE_CONST_FUN_OBJ_2(Hub75SPWM_set_clock_div_obj, Hub75SPWM_set_clock_div);
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(Hub75SPWM_set_config_registers_obj, 2, 4, Hub75SPWM_set_config_registers);
 MP_DEFINE_CONST_FUN_OBJ_1(Hub75SPWM_load_chip_defaults_obj, Hub75SPWM_load_chip_defaults);
+MP_DEFINE_CONST_FUN_OBJ_2(Hub75SPWM_set_gclk_bits_obj, Hub75SPWM_set_gclk_bits);
 MP_DEFINE_CONST_FUN_OBJ_1(Hub75SPWM_stats_obj, Hub75SPWM_stats);
 
 static const mp_rom_map_elem_t Hub75SPWM_locals_dict_table[] = {
@@ -72,6 +73,7 @@ static const mp_rom_map_elem_t Hub75SPWM_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_set_clock_div), MP_ROM_PTR(&Hub75SPWM_set_clock_div_obj) },
     { MP_ROM_QSTR(MP_QSTR_set_config_registers), MP_ROM_PTR(&Hub75SPWM_set_config_registers_obj) },
     { MP_ROM_QSTR(MP_QSTR_load_chip_defaults), MP_ROM_PTR(&Hub75SPWM_load_chip_defaults_obj) },
+    { MP_ROM_QSTR(MP_QSTR_set_gclk_bits), MP_ROM_PTR(&Hub75SPWM_set_gclk_bits_obj) },
     { MP_ROM_QSTR(MP_QSTR_stats), MP_ROM_PTR(&Hub75SPWM_stats_obj) },
 };
 
@@ -100,20 +102,73 @@ const mp_obj_type_t Hub75SPWM_type = {
 // Each profile is a tuple of the red, green and blue register values, in flash
 #include "drivers/hub75/hub75_spwm_profiles.h"
 
-#define HUB75_ROM_INT32(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26, a27, a28, a29, a30, a31) \
-    MP_ROM_INT(a0), MP_ROM_INT(a1), MP_ROM_INT(a2), MP_ROM_INT(a3), MP_ROM_INT(a4), MP_ROM_INT(a5), MP_ROM_INT(a6), MP_ROM_INT(a7), MP_ROM_INT(a8), MP_ROM_INT(a9), MP_ROM_INT(a10), MP_ROM_INT(a11), MP_ROM_INT(a12), MP_ROM_INT(a13), MP_ROM_INT(a14), MP_ROM_INT(a15), MP_ROM_INT(a16), MP_ROM_INT(a17), MP_ROM_INT(a18), MP_ROM_INT(a19), MP_ROM_INT(a20), MP_ROM_INT(a21), MP_ROM_INT(a22), MP_ROM_INT(a23), MP_ROM_INT(a24), MP_ROM_INT(a25), MP_ROM_INT(a26), MP_ROM_INT(a27), MP_ROM_INT(a28), MP_ROM_INT(a29), MP_ROM_INT(a30), MP_ROM_INT(a31)
-#define HUB75_ROM_INTS(...) HUB75_ROM_INT32(__VA_ARGS__)
+// `count` values as MP_ROM_INTs, eg. HUB75_ROM_INTS(3, 1, 2, 3). The values are
+// macro-expanded before they are split, as they aren't used with ##.
+#define HUB75_FE_1(x) MP_ROM_INT(x)
+#define HUB75_FE_2(x, ...) MP_ROM_INT(x), HUB75_FE_1(__VA_ARGS__)
+#define HUB75_FE_3(x, ...) MP_ROM_INT(x), HUB75_FE_2(__VA_ARGS__)
+#define HUB75_FE_4(x, ...) MP_ROM_INT(x), HUB75_FE_3(__VA_ARGS__)
+#define HUB75_FE_5(x, ...) MP_ROM_INT(x), HUB75_FE_4(__VA_ARGS__)
+#define HUB75_FE_6(x, ...) MP_ROM_INT(x), HUB75_FE_5(__VA_ARGS__)
+#define HUB75_FE_7(x, ...) MP_ROM_INT(x), HUB75_FE_6(__VA_ARGS__)
+#define HUB75_FE_8(x, ...) MP_ROM_INT(x), HUB75_FE_7(__VA_ARGS__)
+#define HUB75_FE_9(x, ...) MP_ROM_INT(x), HUB75_FE_8(__VA_ARGS__)
+#define HUB75_FE_10(x, ...) MP_ROM_INT(x), HUB75_FE_9(__VA_ARGS__)
+#define HUB75_FE_11(x, ...) MP_ROM_INT(x), HUB75_FE_10(__VA_ARGS__)
+#define HUB75_FE_12(x, ...) MP_ROM_INT(x), HUB75_FE_11(__VA_ARGS__)
+#define HUB75_FE_13(x, ...) MP_ROM_INT(x), HUB75_FE_12(__VA_ARGS__)
+#define HUB75_FE_14(x, ...) MP_ROM_INT(x), HUB75_FE_13(__VA_ARGS__)
+#define HUB75_FE_15(x, ...) MP_ROM_INT(x), HUB75_FE_14(__VA_ARGS__)
+#define HUB75_FE_16(x, ...) MP_ROM_INT(x), HUB75_FE_15(__VA_ARGS__)
+#define HUB75_FE_17(x, ...) MP_ROM_INT(x), HUB75_FE_16(__VA_ARGS__)
+#define HUB75_FE_18(x, ...) MP_ROM_INT(x), HUB75_FE_17(__VA_ARGS__)
+#define HUB75_FE_19(x, ...) MP_ROM_INT(x), HUB75_FE_18(__VA_ARGS__)
+#define HUB75_FE_20(x, ...) MP_ROM_INT(x), HUB75_FE_19(__VA_ARGS__)
+#define HUB75_FE_21(x, ...) MP_ROM_INT(x), HUB75_FE_20(__VA_ARGS__)
+#define HUB75_FE_22(x, ...) MP_ROM_INT(x), HUB75_FE_21(__VA_ARGS__)
+#define HUB75_FE_23(x, ...) MP_ROM_INT(x), HUB75_FE_22(__VA_ARGS__)
+#define HUB75_FE_24(x, ...) MP_ROM_INT(x), HUB75_FE_23(__VA_ARGS__)
+#define HUB75_FE_25(x, ...) MP_ROM_INT(x), HUB75_FE_24(__VA_ARGS__)
+#define HUB75_FE_26(x, ...) MP_ROM_INT(x), HUB75_FE_25(__VA_ARGS__)
+#define HUB75_FE_27(x, ...) MP_ROM_INT(x), HUB75_FE_26(__VA_ARGS__)
+#define HUB75_FE_28(x, ...) MP_ROM_INT(x), HUB75_FE_27(__VA_ARGS__)
+#define HUB75_FE_29(x, ...) MP_ROM_INT(x), HUB75_FE_28(__VA_ARGS__)
+#define HUB75_FE_30(x, ...) MP_ROM_INT(x), HUB75_FE_29(__VA_ARGS__)
+#define HUB75_FE_31(x, ...) MP_ROM_INT(x), HUB75_FE_30(__VA_ARGS__)
+#define HUB75_FE_32(x, ...) MP_ROM_INT(x), HUB75_FE_31(__VA_ARGS__)
+#define HUB75_FE_33(x, ...) MP_ROM_INT(x), HUB75_FE_32(__VA_ARGS__)
+#define HUB75_FE_34(x, ...) MP_ROM_INT(x), HUB75_FE_33(__VA_ARGS__)
+#define HUB75_FE_35(x, ...) MP_ROM_INT(x), HUB75_FE_34(__VA_ARGS__)
+#define HUB75_FE_36(x, ...) MP_ROM_INT(x), HUB75_FE_35(__VA_ARGS__)
+#define HUB75_FE_37(x, ...) MP_ROM_INT(x), HUB75_FE_36(__VA_ARGS__)
+#define HUB75_FE_38(x, ...) MP_ROM_INT(x), HUB75_FE_37(__VA_ARGS__)
+#define HUB75_FE_39(x, ...) MP_ROM_INT(x), HUB75_FE_38(__VA_ARGS__)
+#define HUB75_FE_40(x, ...) MP_ROM_INT(x), HUB75_FE_39(__VA_ARGS__)
+#define HUB75_FE_41(x, ...) MP_ROM_INT(x), HUB75_FE_40(__VA_ARGS__)
+#define HUB75_FE_42(x, ...) MP_ROM_INT(x), HUB75_FE_41(__VA_ARGS__)
+#define HUB75_FE_43(x, ...) MP_ROM_INT(x), HUB75_FE_42(__VA_ARGS__)
+#define HUB75_FE_44(x, ...) MP_ROM_INT(x), HUB75_FE_43(__VA_ARGS__)
+#define HUB75_FE_45(x, ...) MP_ROM_INT(x), HUB75_FE_44(__VA_ARGS__)
+#define HUB75_FE_46(x, ...) MP_ROM_INT(x), HUB75_FE_45(__VA_ARGS__)
+#define HUB75_FE_47(x, ...) MP_ROM_INT(x), HUB75_FE_46(__VA_ARGS__)
+#define HUB75_FE_48(x, ...) MP_ROM_INT(x), HUB75_FE_47(__VA_ARGS__)
+#define HUB75_ROM_INTS(count, ...) HUB75_FE_##count(__VA_ARGS__)
 
-#define HUB75_PROFILE_TUPLES(n, name) \
-    static const mp_rom_obj_tuple_t sm16380sh_reg##n##_red = {{&mp_type_tuple}, 32, {HUB75_ROM_INTS(HUB75_SPWM_SM16380SH_REG##n##_RED)}}; \
-    static const mp_rom_obj_tuple_t sm16380sh_reg##n##_green = {{&mp_type_tuple}, 32, {HUB75_ROM_INTS(HUB75_SPWM_SM16380SH_REG##n##_GREEN)}}; \
-    static const mp_rom_obj_tuple_t sm16380sh_reg##n##_blue = {{&mp_type_tuple}, 32, {HUB75_ROM_INTS(HUB75_SPWM_SM16380SH_REG##n##_BLUE)}}; \
-    static const mp_rom_obj_tuple_t sm16380sh_reg##n = {{&mp_type_tuple}, 3, { \
-        MP_ROM_PTR(&sm16380sh_reg##n##_red), MP_ROM_PTR(&sm16380sh_reg##n##_green), MP_ROM_PTR(&sm16380sh_reg##n##_blue)}};
+// chip: lower case prefix of the tuples, CHIP: of the profile macros
+#define HUB75_PROFILE_TUPLES(chip, CHIP, n, count) \
+    static const mp_rom_obj_tuple_t chip##_reg##n##_red = {{&mp_type_tuple}, count, {HUB75_ROM_INTS(count, HUB75_SPWM_##CHIP##_REG##n##_RED)}}; \
+    static const mp_rom_obj_tuple_t chip##_reg##n##_green = {{&mp_type_tuple}, count, {HUB75_ROM_INTS(count, HUB75_SPWM_##CHIP##_REG##n##_GREEN)}}; \
+    static const mp_rom_obj_tuple_t chip##_reg##n##_blue = {{&mp_type_tuple}, count, {HUB75_ROM_INTS(count, HUB75_SPWM_##CHIP##_REG##n##_BLUE)}}; \
+    static const mp_rom_obj_tuple_t chip##_reg##n = {{&mp_type_tuple}, 3, { \
+        MP_ROM_PTR(&chip##_reg##n##_red), MP_ROM_PTR(&chip##_reg##n##_green), MP_ROM_PTR(&chip##_reg##n##_blue)}};
 
-HUB75_SPWM_SM16380SH_PROFILES(HUB75_PROFILE_TUPLES)
+#define HUB75_SM16380SH_TUPLES(n, name) HUB75_PROFILE_TUPLES(sm16380sh, SM16380SH, n, 32)
+#define HUB75_FM6373_TUPLES(n, count, name) HUB75_PROFILE_TUPLES(fm6373, FM6373, n, count)
+HUB75_SPWM_SM16380SH_PROFILES(HUB75_SM16380SH_TUPLES)
+HUB75_SPWM_FM6373_PROFILES(HUB75_FM6373_TUPLES)
 
-#define HUB75_PROFILE_GLOBAL(n, name) { MP_ROM_QSTR(MP_QSTR_SM16380SH_REG##n), MP_ROM_PTR(&sm16380sh_reg##n) },
+#define HUB75_SM16380SH_GLOBAL(n, name) { MP_ROM_QSTR(MP_QSTR_SM16380SH_REG##n), MP_ROM_PTR(&sm16380sh_reg##n) },
+#define HUB75_FM6373_GLOBAL(n, count, name) { MP_ROM_QSTR(MP_QSTR_FM6373_REG##n), MP_ROM_PTR(&fm6373_reg##n) },
 
 /***** Globals Table *****/
 
@@ -126,7 +181,13 @@ static const mp_map_elem_t hub75_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_PANEL_SM16380SH), MP_ROM_INT(PANEL_SM16380SH) },
     { MP_ROM_QSTR(MP_QSTR_PANEL_ICND2055), MP_ROM_INT(PANEL_ICND2055) },
     { MP_ROM_QSTR(MP_QSTR_PANEL_FM6373), MP_ROM_INT(PANEL_FM6373) },
-    HUB75_SPWM_SM16380SH_PROFILES(HUB75_PROFILE_GLOBAL)
+    { MP_ROM_QSTR(MP_QSTR_LANES_HALVES), MP_ROM_INT(LANES_HALVES) },
+    { MP_ROM_QSTR(MP_QSTR_LANES_SINGLE), MP_ROM_INT(LANES_SINGLE) },
+    { MP_ROM_QSTR(MP_QSTR_LANES_LEFT_RIGHT), MP_ROM_INT(LANES_LEFT_RIGHT) },
+    { MP_ROM_QSTR(MP_QSTR_ROWS_DECODER), MP_ROM_INT(ROWS_DECODER) },
+    { MP_ROM_QSTR(MP_QSTR_ROWS_SHIFT_REGISTER), MP_ROM_INT(ROWS_SHIFT_REGISTER) },
+    HUB75_SPWM_SM16380SH_PROFILES(HUB75_SM16380SH_GLOBAL)
+    HUB75_SPWM_FM6373_PROFILES(HUB75_FM6373_GLOBAL)
     { MP_ROM_QSTR(MP_QSTR_BUTTON_A), MP_ROM_INT(14) },
     { MP_ROM_QSTR(MP_QSTR_BUTTON_USER), MP_ROM_INT(23) },
     { MP_ROM_QSTR(MP_QSTR_LED_R), MP_ROM_INT(16) },

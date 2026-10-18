@@ -28,6 +28,9 @@ typedef struct _Hub75SPWM_obj_t {
     void *buf;
 } _Hub75SPWM_obj_t;
 
+static_assert((int)Hub75SPWM::Lanes::HALVES == LANES_HALVES && (int)Hub75SPWM::Lanes::SINGLE == LANES_SINGLE
+    && (int)Hub75SPWM::Lanes::LEFT_RIGHT == LANES_LEFT_RIGHT, "LANES_* must match Hub75SPWM::Lanes");
+
 // The driver can only refresh one panel at a time
 static _Hub75SPWM_obj_t *running_obj = nullptr;
 
@@ -56,13 +59,15 @@ mp_obj_t Hub75SPWM___del__(mp_obj_t self_in) {
 }
 
 mp_obj_t Hub75SPWM_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_kw, const mp_obj_t *all_args) {
-    enum { ARG_width, ARG_height, ARG_buffer, ARG_panel_type, ARG_color_order };
+    enum { ARG_width, ARG_height, ARG_buffer, ARG_panel_type, ARG_color_order, ARG_lanes, ARG_row_driver };
     static const mp_arg_t allowed_args[] = {
         { MP_QSTR_width, MP_ARG_REQUIRED | MP_ARG_INT },
         { MP_QSTR_height, MP_ARG_REQUIRED | MP_ARG_INT },
         { MP_QSTR_buffer, MP_ARG_OBJ, {.u_obj = mp_const_none} },
         { MP_QSTR_panel_type, MP_ARG_INT, {.u_int = PANEL_SM16380SH} },
         { MP_QSTR_color_order, MP_ARG_INT, {.u_int = (uint8_t)Hub75::COLOR_ORDER::RGB} },
+        { MP_QSTR_lanes, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = LANES_HALVES} },
+        { MP_QSTR_row_driver, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = ROWS_DECODER} },
     };
 
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
@@ -82,8 +87,19 @@ mp_obj_t Hub75SPWM_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_k
     if(color_order < 0 || color_order > (mp_int_t)Hub75::COLOR_ORDER::BGR) {
         mp_raise_ValueError(MP_ERROR_TEXT("invalid color_order"));
     }
+    mp_int_t lanes = args[ARG_lanes].u_int;
+    mp_int_t row_driver = args[ARG_row_driver].u_int;
+    if(lanes < LANES_HALVES || lanes > LANES_LEFT_RIGHT) {
+        mp_raise_ValueError(MP_ERROR_TEXT("lanes must be LANES_HALVES, LANES_SINGLE or LANES_LEFT_RIGHT"));
+    }
+    if(lanes == LANES_LEFT_RIGHT && width % 32 != 0) {
+        mp_raise_ValueError(MP_ERROR_TEXT("width must be a multiple of 32 for LANES_LEFT_RIGHT"));
+    }
+    if(row_driver != ROWS_DECODER && row_driver != ROWS_SHIFT_REGISTER) {
+        mp_raise_ValueError(MP_ERROR_TEXT("row_driver must be ROWS_DECODER or ROWS_SHIFT_REGISTER"));
+    }
 
-    // The frame buffer: width * height words, the same RAM as Hub75
+    // The frame buffer: width * height words for every layout, the same RAM as Hub75
     size_t buffer_words = width * height;
     uint32_t *buffer = nullptr;
     if(args[ARG_buffer].u_obj != mp_const_none) {
@@ -103,6 +119,9 @@ mp_obj_t Hub75SPWM_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_k
     _Hub75SPWM_obj_t *self = mp_obj_malloc_with_finaliser(_Hub75SPWM_obj_t, &Hub75SPWM_type);
     self->buf = buffer;
     self->hub75 = m_new_class(Hub75SPWM, width, height, chip, buffer, (Hub75::COLOR_ORDER)color_order);
+    self->hub75->row_driver = row_driver == ROWS_SHIFT_REGISTER ? Hub75SPWM::RowDriver::SHIFT_REGISTER : Hub75SPWM::RowDriver::DECODER;
+    // Can't fail: every layout fits in width * height words
+    self->hub75->set_lanes((Hub75SPWM::Lanes)lanes);
 
     return MP_OBJ_FROM_PTR(self);
 }
@@ -214,7 +233,7 @@ static size_t get_registers(mp_obj_t seq_in, uint16_t *regs, size_t max) {
     size_t len;
     mp_obj_t *items;
     mp_obj_get_array(seq_in, &len, &items);
-    if(len == 0 || len > max) mp_raise_ValueError(MP_ERROR_TEXT("expected 1-40 register values"));
+    if(len == 0 || len > max) mp_raise_ValueError(MP_ERROR_TEXT("expected 1-48 register values"));
     for(size_t i = 0; i < len; i++) {
         mp_int_t v = mp_obj_get_int(items[i]);
         if(v < 0 || v > 0xffff) mp_raise_ValueError(MP_ERROR_TEXT("register values must be 16-bit"));
@@ -227,7 +246,7 @@ static size_t get_registers(mp_obj_t seq_in, uint16_t *regs, size_t max) {
 // set_config_registers(profile), a profile like hub75.SM16380SH_REG2 being (red, green, blue)
 mp_obj_t Hub75SPWM_set_config_registers(size_t n_args, const mp_obj_t *args) {
     _Hub75SPWM_obj_t *self = MP_OBJ_TO_PTR2(args[0], _Hub75SPWM_obj_t);
-    const size_t max = 40;
+    const size_t max = 48;
     uint16_t regs[3][max];
     mp_obj_t profile_args[4];
     if(n_args == 2) {
@@ -262,6 +281,15 @@ mp_obj_t Hub75SPWM_set_config_registers(size_t n_args, const mp_obj_t *args) {
 mp_obj_t Hub75SPWM_load_chip_defaults(mp_obj_t self_in) {
     _Hub75SPWM_obj_t *self = MP_OBJ_TO_PTR2(self_in, _Hub75SPWM_obj_t);
     self->hub75->load_chip_defaults();
+    return mp_const_none;
+}
+
+// set_gclk_bits(bits): position + 1 of the greyscale MSB in the chips' words, 12-15
+mp_obj_t Hub75SPWM_set_gclk_bits(mp_obj_t self_in, mp_obj_t bits_in) {
+    _Hub75SPWM_obj_t *self = MP_OBJ_TO_PTR2(self_in, _Hub75SPWM_obj_t);
+    mp_int_t bits = mp_obj_get_int(bits_in);
+    if(bits < 12 || bits > 15) mp_raise_ValueError(MP_ERROR_TEXT("gclk_bits must be 12-15"));
+    self->hub75->set_gclk_bits(bits);
     return mp_const_none;
 }
 

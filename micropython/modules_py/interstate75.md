@@ -119,5 +119,14 @@ while True:
     board.update(sync=2)  # each image is shown for exactly 2 refreshes
 ```
 
+Panels that aren't 1/32 scan with two halves also need `lanes` and `row_driver`, eg. a 128x64 1/64 scan panel with FM6373 drivers:
+
+```python
+board = interstate75.Interstate75(display=interstate75.DISPLAY_INTERSTATE75_128X64,
+                                  panel_type=interstate75.Interstate75.PANEL_FM6373,
+                                  lanes=interstate75.Interstate75.LANES_SINGLE,
+                                  row_driver=interstate75.Interstate75.ROWS_SHIFT_REGISTER)
+```
+
 See [Hub75SPWM](../modules/hub75/README.md#s-pwm-panels-hub75spwm) for all the options.
 

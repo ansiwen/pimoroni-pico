@@ -24,6 +24,17 @@ enum {
     PANEL_FM6373 = 4,
 };
 
+// lanes and row_driver values, as Hub75SPWM::Lanes and RowDriver
+enum {
+    LANES_HALVES = 0,
+    LANES_SINGLE = 1,
+    LANES_LEFT_RIGHT = 2,
+};
+enum {
+    ROWS_DECODER = 0,
+    ROWS_SHIFT_REGISTER = 1,
+};
+
 extern const mp_obj_type_t Hub75SPWM_type;
 
 extern void Hub75SPWM_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind);
@@ -41,4 +52,5 @@ extern mp_obj_t Hub75SPWM_set_avoid_tearing(mp_obj_t self_in, mp_obj_t avoid_in)
 extern mp_obj_t Hub75SPWM_set_clock_div(mp_obj_t self_in, mp_obj_t div_in);
 extern mp_obj_t Hub75SPWM_set_config_registers(size_t n_args, const mp_obj_t *args);
 extern mp_obj_t Hub75SPWM_load_chip_defaults(mp_obj_t self_in);
+extern mp_obj_t Hub75SPWM_set_gclk_bits(mp_obj_t self_in, mp_obj_t bits_in);
 extern mp_obj_t Hub75SPWM_stats(mp_obj_t self_in);
